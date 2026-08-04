@@ -1,0 +1,67 @@
+# ============================================================================
+# LSSTMONTS catalog run
+#
+# EXPLICIT ASSUMPTION:
+#   catalog alpha == xi, the relative source-lens trajectory angle
+#   xi is measured from n1=+Galactic longitude toward n2=+Galactic latitude
+#
+# True model: FSPL + annual parallax
+# Fit model:  FSPL without parallax
+# ============================================================================
+
+paths:
+  project_base: ~/ulensing_degenerate_models/Parallax_LSST
+  roman_rubin_dir: ~/microlensing/simulation_Rubin/roman_rubin
+  rubin_sim_data_dir: ~/rubin_sim_data
+  roman_ephemerides: ~/microlensing/simulation_Rubin/roman_rubin/ephemerides/Roman_positions.npy
+  columns_file: ~/ulensing_degenerate_models/Parallax_LSST/data_sedighe/columns
+  data_file: ~/ulensing_degenerate_models/Parallax_LSST/data_sedighe/LSSTMONTS.dat
+output:
+  root_dir: ~/ulensing_degenerate_models/Parallax_LSST/runs
+  run_name: LSSTMONTS_xi_catalogBlending_FSPLparallax_fitFSPLNoPiE_test5
+catalog:
+  t0_zero_jd: 2460413.013828608
+selection:
+  max_base_events: "all"
+  apply_detection_criteria: false
+parallax:
+  angle_column: xi
+  angle_unit: degrees
+  angle_basis: galactic_n1n2
+  component_convention: east_cos_north_sin
+simulation:
+  model: FSPL
+  system_type_internal: FFP
+fit:
+  model: FSPL
+  parallax: false
+  algorithm: TRF
+  bounds:
+    t0:
+      type: center_width
+      half_width: 1000.0
+    u0:
+    - -5.0
+    - 5.0
+    tE:
+    - 0.1
+    - 20000.0
+fit_window:
+  enabled: true
+  half_width_tE: 3.5
+  minimum_total_points: 10
+observatories:
+  use_roman: false
+  use_rubin: true
+rubin:
+  pointing_mode: source
+  cache_cell_deg: 0.2
+blending:
+  mode: catalog_source_fraction
+  strict: true
+  zero_means_unavailable_filter: true
+  minimum_visible_filters: 3
+execution:
+  workers: 8
+  random_seed: 20260728
+  prepare_only: false
