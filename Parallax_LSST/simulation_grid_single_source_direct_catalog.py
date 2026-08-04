@@ -1249,6 +1249,7 @@ def task_metadata_for_outputs(task):
         "grid_mu_rel_masyr",
         "grid_u0",
         "grid_t0",
+        "grid_t0_phase_days",
         "grid_phi_pi_rad",
         "grid_pi_rel_mas",
         "grid_thetaE_mas",
@@ -1368,7 +1369,7 @@ def run_single_event(task):
                 print(json.dumps(task_metadata_for_outputs(task), indent=4))
                 print("=" * 80)
 
-                sim_fit(
+                result = sim_fit(
                     global_i,
                     cfg["system_type"],
                     model=cfg["model"],
@@ -1396,7 +1397,22 @@ def run_single_event(task):
 
                     rubin_pointing_mode=cfg["rubin_pointing_mode"],
                     rubin_cache_cell_deg=cfg["rubin_cache_cell_deg"],
+
+                    # Importante para saber si el evento fue realmente fiteado
+                    # o si fue rechazado por los criterios de detección.
+                    return_data=True,
                 )
+
+                row["sim_fit_return_type"] = type(result).__name__
+
+                if isinstance(result, dict):
+                    row["sim_fit_status"] = result.get("status", "")
+                    if result.get("status", "") == "rejected":
+                        row["status"] = "rejected"
+                    elif result.get("status", "") == "fitted":
+                        row["status"] = "ok"
+                else:
+                    row["sim_fit_status"] = "legacy_return"
 
                 try:
                     import set_telescopes_pyLIMA as stp
@@ -1444,7 +1460,8 @@ def run_single_event(task):
                 print("Evento terminado correctamente")
                 print("=" * 80)
 
-        row["status"] = "ok"
+        if row.get("status") not in ["rejected", "failed", "executor_failed"]:
+            row["status"] = "ok"
 
     except Exception as e:
 
@@ -1831,7 +1848,7 @@ def main():
 
     BASE_DIR = Path("/home/anibal/Parallax_LSST")
 
-    RUN_NAME = "Grid_SingleSource_directCatalog_near_lens_RubinOnly_PSPLparallax_fitNoPiE_MAFbin020"
+    RUN_NAME = "Grid_SingleSource_directCatalog_near_lens_RubinOnly_PSPLparallax_fitNoPiE_MAFbin020_JDt0"
 
     RUN_DIR = BASE_DIR / "runs" / RUN_NAME
 
@@ -1872,7 +1889,7 @@ def main():
 
     # En muchas maquinas 6-8 workers puede ser mas rapido que 16
     # por I/O y memoria.
-    N_WORKERS = 12
+    N_WORKERS = 8
 
     # ============================================================
     # Lineas de vision del plano galactico
@@ -1933,7 +1950,12 @@ def main():
     U0_GRID = np.array([0.10, 0.30, 0.60])
 
     # Fases anuales del maximo del evento.
-    T0_GRID = np.array([0.0, 91.3125, 182.625, 273.9375])
+    # Ojo: pyLIMA/Rubin trabaja en JD absolutos.
+    # Si usamos t0 = 0, 91, ... el pico cae miles de días fuera
+    # de la ventana Rubin y todos los eventos son rechazados.
+    T0_REFERENCE_JD = 2460413.013828608
+    T0_PHASE_GRID_DAYS = np.array([0.0, 91.3125, 182.625, 273.9375])
+    T0_GRID = T0_REFERENCE_JD + T0_PHASE_GRID_DAYS
 
     # Direccion del vector de paralaje / trayectoria.
     PHI_PI_GRID_RAD = np.linspace(
@@ -1963,6 +1985,8 @@ def main():
         tE_min_days=TE_MIN_DAYS,
         tE_max_days=TE_MAX_DAYS,
     )
+
+    grid_full["grid_t0_phase_days"] = grid_full["grid_t0"] - T0_REFERENCE_JD
 
     # ============================================================
     # Bounds del fit NoPiE
@@ -2052,6 +2076,8 @@ def main():
         "ML_GRID_MSUN": ML_GRID_MSUN.tolist(),
         "MU_REL_GRID_MASYR": MU_REL_GRID_MASYR.tolist(),
         "U0_GRID": U0_GRID.tolist(),
+        "T0_REFERENCE_JD": float(T0_REFERENCE_JD),
+        "T0_PHASE_GRID_DAYS": T0_PHASE_GRID_DAYS.tolist(),
         "T0_GRID": T0_GRID.tolist(),
         "PHI_PI_GRID_RAD": PHI_PI_GRID_RAD.tolist(),
         "TE_MIN_DAYS": TE_MIN_DAYS,
