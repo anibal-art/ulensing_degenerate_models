@@ -1,18 +1,19 @@
 {
   "path_storage": "/home/anibal/ulensing_degenerate_models/Parallax_LSST/runs",
-  "run_name": "LSSTMONTS_xi_baseline_v5p3p5_catalogBlending_FSPLparallax_fitFSPLNoPiE_test",
+  "run_name": "LSSTMONTS_xi_baseline_v5p3p5_hiddenParallax_FSPLparallax_fitFSPLNoPiE_t0pm60_DetectionFlag",
   "model": "FSPL",
   "algo": "TRF",
   "system_type": "FFP",
   "N_tr": 4,
-  "Nevents": 20,
+  "Nevents": "all",
   "n_db_file": 1,
   "input": {
     "type": "sedighe_lsstmonts",
     "columns_file": "/home/anibal/ulensing_degenerate_models/Parallax_LSST/data_sedighe/columns",
     "data_file": "/home/anibal/ulensing_degenerate_models/Parallax_LSST/data_sedighe/LSSTMONTS.dat",
-    "read_nrows": 1000,
-    "t0_zero_jd": 2460413.013828608
+    "read_nrows": "all",
+    "t0_zero_jd": 2460413.013828608,
+    "t0_origin": "first_maf_timestamp"
   },
   "observing": {
     "use_roman": false,
@@ -28,7 +29,7 @@
     "bounds": {
       "t0": {
         "type": "center_width",
-        "half_width": 1000.0
+        "half_width": 60.0
       },
       "u0": [
         -5.0,
@@ -52,7 +53,8 @@
     "apply_detection_criteria": false,
     "rubin_pointing_mode": "source",
     "rubin_cache_cell_deg": 0.2,
-    "time_window": null
+    "time_window": null,
+    "apply_photometric_filter": true
   },
   "rubin": {
     "opsim_db_path": "/home/anibal/rubin_sim_data/sim_baseline/sim_baseline_2026_07_23/sim_baseline/baseline_v5.3.5_10yrs.db"
@@ -63,12 +65,27 @@
     "angle_basis": "galactic_n1n2",
     "component_convention": "east_cos_north_sin",
     "blending_mode": "catalog_source_fraction",
-    "zero_means_unavailable_filter": true,
-    "minimum_visible_filters": 3
+    "zero_means_unavailable_filter": false,
+    "minimum_visible_filters": 3,
+    "band_availability": "detection_flag",
+    "availability_note": "Use DetectionFlag_* columns to decide available catalog bands; do not infer band availability from blend_* == 0."
   },
   "execution": {
-    "workers": 4,
+    "workers": 12,
     "random_seed": 20260730,
     "prepare_only": false
+  },
+  "hidden_parallax": {
+    "make_plots": false,
+    "plot_style": "aligned_inset",
+    "reference_band": "g",
+    "allow_reference_band_fallback": true,
+    "plot_n_dense": 10000,
+    "plot_n_tE": 10.0,
+    "plot_inset_n_tE": 4.0,
+    "plot_inset_loc": "upper left",
+    "plot_show_true_no_parallax_reference": false,
+    "plot_fit_trajectory_time_mode": "own_fit_tE_window",
+    "save_plot_dpi": 180
   }
 }

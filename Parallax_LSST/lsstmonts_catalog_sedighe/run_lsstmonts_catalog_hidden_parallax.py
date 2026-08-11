@@ -17,9 +17,16 @@ Experiment implemented here
 - the true event is FSPL with annual parallax;
 - the fit is FSPL without parallax;
 - the event is generated with the complete MAF cadence;
+- the catalog t0 is interpreted as days after the first OpSim/MAF
+  timestamp read for the selected field/source;
 - only the fit is restricted to t0 +/- k*tE (k=3.5 by default);
 - the catalog was already detection-selected, so the internal
-  deviation-from-constant criterion is disabled.
+  deviation-from-constant criterion is disabled;
+- band availability is controlled by DetectionFlag_* by default;
+- the t0 reference timestamp is the first MAF timestamp in the
+  catalog-visible bands, not necessarily the first raw MAF timestamp;
+- the photometric m5/5-sigma point filter is controlled explicitly
+  from simulation.apply_photometric_filter in the configuration file.
 
 Scientific convention used in this runner
 -----------------------------------------
@@ -738,6 +745,10 @@ if PARALLAX_COMPONENT_CONVENTION not in {
         "east_cos_north_sin o north_cos_east_sin."
     )
 
+# Legacy value kept only for diagnostics/backward-compatible metadata.
+# It is NOT allowed to define the simulated event t0.
+# Scientific convention enforced below:
+#     t0_jd = first_OpSim_MAF_timestamp_for_this_field + t0_catalog_days
 T0_ZERO_JD = float(
     first_config_value(
         cfg("input", "t0_zero_jd", None),
@@ -745,6 +756,24 @@ T0_ZERO_JD = float(
         default=2460413.013828608,
     )
 )
+
+T0_ORIGIN_POLICY = str(
+    first_config_value(
+        cfg("input", "t0_origin", None),
+        cfg("catalog", "t0_origin", None),
+        cfg("sedighe", "t0_origin", None),
+        default="first_maf_timestamp",
+    )
+).lower()
+
+if T0_ORIGIN_POLICY not in {"first_maf_timestamp", "first_opsim_timestamp"}:
+    raise ValueError(
+        "Este runner solo permite interpretar t0_catalog_days desde el "
+        "primer timestamp OpSim/MAF del campo. Configure "
+        "catalog.t0_origin: first_maf_timestamp."
+    )
+
+T0_ORIGIN_POLICY = "first_maf_timestamp"
 
 RANDOM_SEED = int(
     cfg("execution", "random_seed", 20260728)
@@ -852,6 +881,14 @@ APPLY_DETECTION_CRITERIA = bool(
     )
 )
 
+APPLY_PHOTOMETRIC_FILTER = bool(
+    first_config_value(
+        cfg("simulation", "apply_photometric_filter", None),
+        cfg("selection", "apply_photometric_filter", None),
+        default=True,
+    )
+)
+
 USE_ROMAN = bool(
     first_config_value(
         cfg("observing", "use_roman", None),
@@ -894,7 +931,7 @@ FIT_BOUNDS_NOPIE = cfg(
     {
         "t0": {
             "type": "center_width",
-            "half_width": 1000.0,
+            "half_width": 60.0,
         },
         "u0": [-5.0, 5.0],
         "tE": [0.1, 20000.0],
@@ -978,6 +1015,26 @@ if BLENDING_MINIMUM_VISIBLE_FILTERS < 1:
         "blending.minimum_visible_filters debe ser al menos 1."
     )
 
+BAND_AVAILABILITY_MODE = str(
+    first_config_value(
+        cfg("sedighe", "band_availability", None),
+        cfg("selection", "band_availability", None),
+        cfg("blending", "band_availability", None),
+        default="detection_flag",
+    )
+).lower()
+
+if BAND_AVAILABILITY_MODE not in {
+    "detection_flag",
+    "blend_positive",
+    "all",
+}:
+    raise ValueError(
+        "sedighe.band_availability debe ser 'detection_flag', "
+        "'blend_positive' o 'all'. "
+        f"Recibido: {BAND_AVAILABILITY_MODE!r}."
+    )
+
 if BLENDING_MODE != "catalog_source_fraction":
     raise NotImplementedError(
         "Esta versión requiere blending.mode: catalog_source_fraction."
@@ -987,6 +1044,7 @@ BLENDING_ASSUMPTION = {
     "mode": BLENDING_MODE,
     "definition": "f_s = F_source / (F_source + F_blend)",
     "source": "catalog columns",
+    "band_availability_mode": BAND_AVAILABILITY_MODE,
     "zero_means_unavailable_filter":
         BLENDING_ZERO_MEANS_UNAVAILABLE_FILTER,
     "minimum_visible_filters":
@@ -1113,6 +1171,13 @@ BLEND_COLUMNS = [
 
 SOURCE_MAG_COLUMNS = ["u", "g", "r", "i", "z", "Y"]
 
+CATALOG_BANDS = ["u", "g", "r", "i", "z", "y"]
+
+DETECTION_FLAG_COLUMNS = [
+    f"DetectionFlag_{band}"
+    for band in CATALOG_BANDS
+]
+
 
 # ============================================================================
 # Worker globals
@@ -1124,6 +1189,7 @@ GLOBAL_WORKER_CONFIG = None
 # Per-process runtime context. Each ProcessPool worker executes one event at a
 # time, so these values are not shared between simultaneous events.
 _RUNTIME_BLEND_SOURCE_FRACTION = None
+_RUNTIME_AVAILABLE_BANDS = None
 _RUNTIME_FIT_WINDOW = None
 _RUNTIME_FIT_MIN_POINTS = 1
 _RUNTIME_LAST_FIT_COUNTS = {}
@@ -1165,17 +1231,125 @@ def _canonical_catalog_band(telescope_name):
     return None
 
 
+def _canonical_maf_filter(filter_name):
+    """
+    Canonicalize OpSim/MAF filter names to u,g,r,i,z,y.
+
+    This also accepts names with suffixes such as r_57.
+    """
+
+    lower = str(filter_name).strip().lower()
+
+    if lower in set(CATALOG_BANDS):
+        return lower
+
+    for band in CATALOG_BANDS:
+        if lower.startswith(band + "_") or lower.endswith("_" + band):
+            return band
+
+    if len(lower) > 0 and lower[0] in set(CATALOG_BANDS):
+        return lower[0]
+
+    return lower
+
+
+def _find_dataslice_filter_column(dataSlice):
+    """
+    Return the filter-column name used by the current MAF/dataSlice.
+    """
+
+    names = dataSlice.dtype.names
+
+    if names is None:
+        raise RuntimeError(
+            "dataSlice no tiene dtype.names; no puedo identificar filtros."
+        )
+
+    for candidate in [
+        "filter",
+        "band",
+        "filtername",
+        "filterName",
+        "filter_name",
+    ]:
+        if candidate in names:
+            return candidate
+
+    raise KeyError(
+        "No encontré columna de filtro en dataSlice. "
+        f"Columnas disponibles: {names}"
+    )
+
+
+def _visible_bands_from_row(base_row, mode=None):
+    """
+    Define which catalog bands are allowed to enter the simulated event.
+
+    Preferred mode:
+        detection_flag:
+            DetectionFlag_band == 1 means the source is visible in that band.
+
+    The blending factors are not used as availability flags in this mode.
+    They are only used as source fractions for active bands.
+    """
+
+    if mode is None:
+        mode = BAND_AVAILABILITY_MODE
+
+    mode = str(mode).lower()
+
+    if mode == "all":
+        return list(CATALOG_BANDS)
+
+    if mode == "blend_positive":
+        return [
+            band for band in CATALOG_BANDS
+            if float(base_row.get(f"blend_{band}", 0.0)) > 0.0
+        ]
+
+    if mode == "detection_flag":
+        missing = [
+            f"DetectionFlag_{band}"
+            for band in CATALOG_BANDS
+            if f"DetectionFlag_{band}" not in base_row.index
+        ]
+
+        if missing:
+            raise KeyError(
+                "band_availability='detection_flag' requiere estas columnas: "
+                f"{missing}"
+            )
+
+        visible_bands = []
+
+        for band in CATALOG_BANDS:
+            flag = float(base_row[f"DetectionFlag_{band}"])
+
+            if not np.isfinite(flag):
+                raise ValueError(
+                    f"DetectionFlag_{band} no es finito: {flag}"
+                )
+
+            if int(round(flag)) == 1:
+                visible_bands.append(band)
+
+        return visible_bands
+
+    raise ValueError(
+        f"band availability mode desconocido: {mode!r}"
+    )
+
+
 def model_choice_catalog_visible_filters(
     event,
     *args,
     **kwargs,
 ):
     """
-    Remove catalog filters with f_s == 0 before pyLIMA constructs flux bounds.
+    Keep only the catalog-visible filters before pyLIMA constructs flux bounds.
 
-    The catalog was selected to be visible in at least three filters. A zero
-    source fraction in an individual band is therefore treated as an
-    unavailable band, not as an invalid physical event.
+    The preferred availability criterion is DetectionFlag_band == 1.
+    Blending factors are used only as source fractions for active bands.
     """
 
     if _ORIGINAL_MODEL_CHOICE is None:
@@ -1190,6 +1364,11 @@ def model_choice_catalog_visible_filters(
             **kwargs,
         )
 
+    if _RUNTIME_AVAILABLE_BANDS is None:
+        available_bands = list(CATALOG_BANDS)
+    else:
+        available_bands = list(_RUNTIME_AVAILABLE_BANDS)
+
     kept_telescopes = []
     removed_telescopes = []
 
@@ -1202,20 +1381,29 @@ def model_choice_catalog_visible_filters(
             kept_telescopes.append(telescope)
             continue
 
+        if catalog_band not in available_bands:
+            removed_telescopes.append(
+                {
+                    "telescope": str(telescope.name),
+                    "catalog_band": catalog_band,
+                    "reason": f"band_availability={BAND_AVAILABILITY_MODE}",
+                }
+            )
+            continue
+
         source_fraction = float(
             _RUNTIME_BLEND_SOURCE_FRACTION[
                 catalog_band
             ]
         )
 
-        if (
-            BLENDING_ZERO_MEANS_UNAVAILABLE_FILTER
-            and source_fraction == 0.0
-        ):
-            removed_telescopes.append(
-                str(telescope.name)
+        if not np.isfinite(source_fraction) or not (0.0 < source_fraction <= 1.0):
+            raise ValueError(
+                f"Blending/source fraction inválido para banda activa "
+                f"{catalog_band}: {source_fraction}. "
+                "Para bandas con DetectionFlag=1 se requiere "
+                "0 < F_source/F_total <= 1."
             )
-            continue
 
         kept_telescopes.append(telescope)
 
@@ -1223,14 +1411,14 @@ def model_choice_catalog_visible_filters(
 
     if removed_telescopes:
         print(
-            "Catalog filters removed because f_s == 0:",
+            "Catalog filters removed by band availability:",
             removed_telescopes,
         )
 
     if len(event.telescopes) == 0:
         raise FitWindowRejected(
-            "No catalog-visible filters remain after removing "
-            "bands with f_s == 0."
+            "No catalog-visible filters remain after applying "
+            f"band_availability={BAND_AVAILABILITY_MODE}."
         )
 
     print(
@@ -1239,6 +1427,10 @@ def model_choice_catalog_visible_filters(
             telescope.name
             for telescope in event.telescopes
         ],
+    )
+    print(
+        "Catalog available bands:",
+        available_bands,
     )
 
     return _ORIGINAL_MODEL_CHOICE(
@@ -1505,6 +1697,7 @@ def install_runtime_patches():
 
 def set_runtime_event_context(base_row):
     global _RUNTIME_BLEND_SOURCE_FRACTION
+    global _RUNTIME_AVAILABLE_BANDS
     global _RUNTIME_FIT_WINDOW
     global _RUNTIME_FIT_MIN_POINTS
     global _RUNTIME_LAST_FIT_COUNTS
@@ -1518,6 +1711,11 @@ def set_runtime_event_context(base_row):
         "y": float(base_row["blend_y"]),
     }
 
+    _RUNTIME_AVAILABLE_BANDS = _visible_bands_from_row(
+        base_row,
+        mode=BAND_AVAILABILITY_MODE,
+    )
+
     _RUNTIME_FIT_WINDOW = build_event_fit_window(base_row)
     _RUNTIME_FIT_MIN_POINTS = FIT_WINDOW_MINIMUM_TOTAL_POINTS
     _RUNTIME_LAST_FIT_COUNTS = {}
@@ -1525,10 +1723,12 @@ def set_runtime_event_context(base_row):
 
 def clear_runtime_event_context():
     global _RUNTIME_BLEND_SOURCE_FRACTION
+    global _RUNTIME_AVAILABLE_BANDS
     global _RUNTIME_FIT_WINDOW
     global _RUNTIME_LAST_FIT_COUNTS
 
     _RUNTIME_BLEND_SOURCE_FRACTION = None
+    _RUNTIME_AVAILABLE_BANDS = None
     _RUNTIME_FIT_WINDOW = None
     _RUNTIME_LAST_FIT_COUNTS = {}
 
@@ -1828,10 +2028,23 @@ def prepare_catalog(raw_catalog, max_base_events):
         / data["tE_catalog_days"]
     )
 
-    data["t0_jd"] = (
+    # IMPORTANT:
+    # t0_catalog_days is a relative time from Sedighe's catalog.
+    # It must NOT be converted with a fixed global JD origin.
+    # The absolute t0 is resolved per event after reading the relevant
+    # OpSim/MAF dataSlice:
+    #
+    #     t0_jd = first_maf_timestamp_jd + t0_catalog_days
+    #
+    # Keep the old fixed-origin value only as a diagnostic.
+    data["t0_jd_original_global_zero"] = (
         T0_ZERO_JD
         + data["t0_catalog_days"]
     )
+    data["t0_reference_jd"] = np.nan
+    data["t0_reference_mjd"] = np.nan
+    data["t0_origin"] = "unresolved_requires_first_maf_timestamp"
+    data["t0_jd"] = np.nan
 
     data["D_L"] = 1000.0 * data["lens_distance_kpc"]
     data["D_S"] = 1000.0 * data["source_distance_kpc"]
@@ -1884,7 +2097,7 @@ def prepare_catalog(raw_catalog, max_base_events):
         "logL",
         "lens_mass_msun",
         "u0",
-        "t0_jd",
+        "t0_catalog_days",
         "piE",
         "rho",
         "alpha_rad",
@@ -1893,6 +2106,30 @@ def prepare_catalog(raw_catalog, max_base_events):
     ]
 
     valid = np.ones(len(data), dtype=bool)
+    data["invalid_reason"] = ""
+
+    def mark_invalid(mask, reason):
+        """Attach a row-level invalid reason without aborting the full run."""
+
+        mask = np.asarray(mask, dtype=bool)
+
+        if len(mask) != len(data):
+            raise ValueError(
+                f"Máscara inválida para {reason}: "
+                f"len(mask)={len(mask)}, len(data)={len(data)}"
+            )
+
+        if not np.any(mask):
+            return
+
+        previous = data.loc[mask, "invalid_reason"].astype(str)
+        empty = previous.isin(["", "nan", "None"])
+
+        data.loc[mask, "invalid_reason"] = np.where(
+            empty,
+            reason,
+            previous + ";" + reason,
+        )
 
     for column in finite_required:
         valid &= np.isfinite(
@@ -1907,21 +2144,78 @@ def prepare_catalog(raw_catalog, max_base_events):
     valid &= data["mu_rel"].to_numpy(dtype=float) > 0.0
     valid &= data["lens_mass_msun"].to_numpy(dtype=float) > 0.0
     valid &= data["tE_catalog_days"].to_numpy(dtype=float) > 0.0
+    valid &= data["t0_catalog_days"].to_numpy(dtype=float) >= 0.0
     valid &= data["piE"].to_numpy(dtype=float) >= 0.0
     valid &= data["rho"].to_numpy(dtype=float) > 0.0
+
+    mark_invalid(
+        ~valid,
+        "invalid_basic_finite_or_physical_quantity",
+    )
 
     blend_matrix = data[
         BLEND_COLUMNS
     ].to_numpy(dtype=float)
 
     blend_range_valid = np.all(
-        (blend_matrix >= 0.0)
+        np.isfinite(blend_matrix)
+        & (blend_matrix >= 0.0)
         & (blend_matrix <= 1.0),
         axis=1,
     )
 
+    if BAND_AVAILABILITY_MODE == "detection_flag":
+        missing_flags = [
+            column for column in DETECTION_FLAG_COLUMNS
+            if column not in data.columns
+        ]
+
+        if missing_flags:
+            raise KeyError(
+                "sedighe.band_availability='detection_flag' requiere "
+                f"estas columnas: {missing_flags}"
+            )
+
+        flag_matrix = data[
+            DETECTION_FLAG_COLUMNS
+        ].to_numpy(dtype=float)
+
+        flag_finite = np.all(
+            np.isfinite(flag_matrix),
+            axis=1,
+        )
+
+        flag_binary = np.all(
+            np.isin(
+                np.rint(flag_matrix).astype(int),
+                [0, 1],
+            ),
+            axis=1,
+        )
+
+        flag_valid = flag_finite & flag_binary
+        availability_matrix = (
+            np.rint(flag_matrix).astype(int) == 1
+        )
+
+    elif BAND_AVAILABILITY_MODE == "blend_positive":
+        flag_valid = np.ones(len(data), dtype=bool)
+        availability_matrix = blend_matrix > 0.0
+
+    elif BAND_AVAILABILITY_MODE == "all":
+        flag_valid = np.ones(len(data), dtype=bool)
+        availability_matrix = np.ones_like(
+            blend_matrix,
+            dtype=bool,
+        )
+
+    else:
+        raise ValueError(
+            f"band_availability desconocido: {BAND_AVAILABILITY_MODE!r}"
+        )
+
     visible_filter_count = np.sum(
-        blend_matrix > 0.0,
+        availability_matrix,
         axis=1,
     )
 
@@ -1929,44 +2223,129 @@ def prepare_catalog(raw_catalog, max_base_events):
         visible_filter_count.astype(int)
     )
 
+    data["catalog_available_bands"] = [
+        ",".join(
+            band
+            for band, is_available in zip(CATALOG_BANDS, row)
+            if is_available
+        )
+        for row in availability_matrix
+    ]
+
+    for k, band in enumerate(CATALOG_BANDS):
+        data[f"catalog_band_available_{band}"] = (
+            availability_matrix[:, k].astype(int)
+        )
+
     enough_visible_filters = (
         visible_filter_count
         >= BLENDING_MINIMUM_VISIBLE_FILTERS
     )
 
+    # Only active/available bands need strictly positive source fraction.
+    # Inactive bands may carry a catalog value, but it is not used.
+    source_fraction_positive_in_available = np.ones(
+        len(data),
+        dtype=bool,
+    )
+
+    for k, band in enumerate(CATALOG_BANDS):
+        source_fraction_positive_in_available &= (
+            (~availability_matrix[:, k])
+            | (blend_matrix[:, k] > 0.0)
+        )
+
+    mark_invalid(~blend_range_valid, "invalid_blend_source_fraction_range")
+    mark_invalid(~flag_valid, "invalid_detection_flag")
+    mark_invalid(~enough_visible_filters, "too_few_visible_filters")
+    mark_invalid(
+        ~source_fraction_positive_in_available,
+        "visible_band_with_nonpositive_source_fraction",
+    )
+
     blend_valid = (
         blend_range_valid
+        & flag_valid
         & enough_visible_filters
+        & source_fraction_positive_in_available
     )
 
     if BLENDING_STRICT and np.any(~blend_range_valid):
         bad = data.loc[
             ~blend_range_valid,
-            ["catalog_row", *BLEND_COLUMNS],
+            ["catalog_row", "invalid_reason", *BLEND_COLUMNS],
         ].head(20)
 
-        raise ValueError(
-            "Los factores de blending deben cumplir "
-            "0 <= f_s <= 1. Primeros casos fuera de rango:\n"
-            + bad.to_string(index=False)
+        print(
+            "[warning] Hay filas con factores de blending/source fraction "
+            "fuera de rango o no finitos. Estas filas se marcarán como "
+            "inválidas y no se simularán. Primeros casos:"
         )
+        print(bad.to_string(index=False))
+
+    if BLENDING_STRICT and np.any(~flag_valid):
+        bad = data.loc[
+            ~flag_valid,
+            [
+                "catalog_row",
+                "invalid_reason",
+                *[
+                    column for column in DETECTION_FLAG_COLUMNS
+                    if column in data.columns
+                ],
+            ],
+        ].head(20)
+
+        print(
+            "[warning] Hay filas con DetectionFlag_* no finitas o no "
+            "binarias. Estas filas se marcarán como inválidas y no se "
+            "simularán. Primeros casos:"
+        )
+        print(bad.to_string(index=False))
 
     if BLENDING_STRICT and np.any(~enough_visible_filters):
         bad = data.loc[
             ~enough_visible_filters,
             [
                 "catalog_row",
+                "invalid_reason",
                 "catalog_visible_filter_count",
+                "catalog_available_bands",
+                *[
+                    column for column in DETECTION_FLAG_COLUMNS
+                    if column in data.columns
+                ],
                 *BLEND_COLUMNS,
             ],
         ].head(20)
 
-        raise ValueError(
-            "Hay eventos con menos filtros visibles que el mínimo "
-            f"configurado ({BLENDING_MINIMUM_VISIBLE_FILTERS}). "
-            "Primeros casos:\n"
-            + bad.to_string(index=False)
+        print(
+            "[warning] Hay eventos con menos filtros visibles que el "
+            f"mínimo configurado ({BLENDING_MINIMUM_VISIBLE_FILTERS}) "
+            f"usando band_availability={BAND_AVAILABILITY_MODE}. "
+            "Estas filas se marcarán como inválidas y no se simularán. "
+            "Primeros casos:"
         )
+        print(bad.to_string(index=False))
+
+    if BLENDING_STRICT and np.any(~source_fraction_positive_in_available):
+        bad = data.loc[
+            ~source_fraction_positive_in_available,
+            [
+                "catalog_row",
+                "invalid_reason",
+                "catalog_available_bands",
+                *BLEND_COLUMNS,
+            ],
+        ].head(20)
+
+        print(
+            "[warning] Hay bandas catalogadas como visibles pero con "
+            "source fraction <= 0. Para bandas activas se requiere "
+            "0 < F_source/F_total <= 1. Estas filas se marcarán como "
+            "inválidas y no se simularán. Primeros casos:"
+        )
+        print(bad.to_string(index=False))
 
     valid &= blend_valid
 
@@ -2243,6 +2622,257 @@ def build_single_row_pair_catalog(base_row, task):
     return pd.DataFrame([row])
 
 
+def validate_t0_first_maf_timestamp(base_row, context=""):
+    """
+    Enforce the only allowed t0 convention for this runner.
+
+    Sedighe's catalog t0 is relative to the first OpSim/MAF timestamp
+    read for the selected field/source:
+
+        t0_jd = t0_reference_jd + t0_catalog_days
+
+    Any caller that tries to use the provisional/fixed-origin t0 must fail.
+    """
+
+    prefix = f"[{context}] " if context else ""
+
+    origin = str(
+        base_row.get("t0_origin", "")
+    )
+
+    if origin != "first_maf_timestamp":
+        raise RuntimeError(
+            prefix
+            + "t0_jd todavía no fue resuelto desde el primer timestamp "
+            "OpSim/MAF del campo. Llamá primero a "
+            "apply_t0_from_first_maf_timestamp(base_row, config). "
+            f"t0_origin actual={origin!r}."
+        )
+
+    t0_reference_jd = float(base_row.get("t0_reference_jd", np.nan))
+    t0_catalog_days = float(base_row.get("t0_catalog_days", np.nan))
+    t0_jd = float(base_row.get("t0_jd", np.nan))
+
+    if not np.isfinite(t0_reference_jd):
+        raise RuntimeError(
+            prefix + "t0_reference_jd no es finito."
+        )
+
+    if not np.isfinite(t0_catalog_days):
+        raise RuntimeError(
+            prefix + "t0_catalog_days no es finito."
+        )
+
+    if t0_catalog_days < 0.0:
+        raise RuntimeError(
+            prefix
+            + "t0_catalog_days es negativo. En este runner debe estar "
+            "medido como días desde el primer timestamp OpSim/MAF. "
+            f"Valor={t0_catalog_days}."
+        )
+
+    if not np.isfinite(t0_jd):
+        raise RuntimeError(
+            prefix + "t0_jd no es finito."
+        )
+
+    expected = t0_reference_jd + t0_catalog_days
+
+    if not np.isclose(t0_jd, expected, rtol=0.0, atol=1.0e-7):
+        raise RuntimeError(
+            prefix
+            + "Convención temporal inválida para t0. Debe cumplirse "
+            "t0_jd = t0_reference_jd + t0_catalog_days. "
+            f"t0_jd={t0_jd:.9f}, "
+            f"t0_reference_jd={t0_reference_jd:.9f}, "
+            f"t0_catalog_days={t0_catalog_days:.9f}, "
+            f"expected={expected:.9f}."
+        )
+
+    return True
+
+
+def first_timestamps_from_pylima_event(pyLIMA_model):
+    """
+    Return first/last JD among all non-empty telescope lightcurves,
+    globally and per retained telescope, after event construction and
+    photometric filtering.
+    """
+
+    out = {
+        "event_first_jd_after_filters": np.nan,
+        "event_last_jd_after_filters": np.nan,
+        "event_first_band_after_filters": "",
+        "event_n_points_after_filters": 0,
+    }
+
+    first_candidates = []
+    last_candidates = []
+    total_points = 0
+
+    for telescope in pyLIMA_model.event.telescopes:
+        if telescope.lightcurve is None:
+            continue
+        if len(telescope.lightcurve) == 0:
+            continue
+        if "time" not in telescope.lightcurve.colnames:
+            continue
+
+        band = str(telescope.name)
+
+        time = np.asarray(
+            getattr(
+                telescope.lightcurve["time"],
+                "value",
+                telescope.lightcurve["time"],
+            ),
+            dtype=float,
+        )
+
+        time = time[np.isfinite(time)]
+
+        if len(time) == 0:
+            continue
+
+        t_min = float(np.min(time))
+        t_max = float(np.max(time))
+        n_band = int(len(time))
+
+        out[f"event_first_jd_after_filters_{band}"] = t_min
+        out[f"event_last_jd_after_filters_{band}"] = t_max
+        out[f"event_n_points_after_filters_{band}"] = n_band
+
+        first_candidates.append((t_min, band))
+        last_candidates.append(t_max)
+        total_points += n_band
+
+    if len(first_candidates) == 0:
+        raise RuntimeError(
+            "No hay timestamps finitos en el evento pyLIMA simulado."
+        )
+
+    first_candidates = sorted(first_candidates, key=lambda x: x[0])
+
+    out["event_first_jd_after_filters"] = float(first_candidates[0][0])
+    out["event_first_band_after_filters"] = str(first_candidates[0][1])
+    out["event_last_jd_after_filters"] = float(np.max(last_candidates))
+    out["event_n_points_after_filters"] = int(total_points)
+
+    return out
+
+
+def first_timestamp_from_pylima_event(pyLIMA_model):
+    """
+    Backward-compatible scalar helper.
+    """
+
+    return float(
+        first_timestamps_from_pylima_event(pyLIMA_model)[
+            "event_first_jd_after_filters"
+        ]
+    )
+
+
+def validate_simulated_event_uses_t0_reference(
+    result,
+    base_row,
+    strict_equality=False,
+    atol_days=1.0e-7,
+):
+    """
+    Verify the t0 convention and record how the retained pyLIMA event starts.
+
+    Strict, fatal check:
+        t0_jd = t0_reference_jd + t0_catalog_days
+
+    Non-fatal diagnostic:
+        the first retained point after band availability and photometric
+        filtering can be later than t0_reference_jd.
+    """
+
+    validate_t0_first_maf_timestamp(
+        base_row,
+        context="validate_simulated_event_uses_t0_reference",
+    )
+
+    diagnostic = {
+        "t0_reference_check_status": "not_checked",
+        "t0_reference_jd": float(base_row.get("t0_reference_jd", np.nan)),
+        "t0_catalog_days": float(base_row.get("t0_catalog_days", np.nan)),
+        "t0_jd": float(base_row.get("t0_jd", np.nan)),
+        "event_first_jd_after_filters": np.nan,
+        "event_first_minus_t0_reference_days": np.nan,
+        "t0_reference_check_message": "",
+    }
+
+    if not isinstance(result, dict):
+        diagnostic["t0_reference_check_status"] = "non_dict_result"
+        return diagnostic
+
+    pyLIMA_model = result.get("pyLIMAmodel_true", None)
+
+    if pyLIMA_model is None:
+        diagnostic["t0_reference_check_status"] = "no_true_model"
+        return diagnostic
+
+    event_time_info = first_timestamps_from_pylima_event(
+        pyLIMA_model
+    )
+
+    diagnostic.update(event_time_info)
+
+    reference_jd = float(base_row["t0_reference_jd"])
+    event_first_jd = float(event_time_info["event_first_jd_after_filters"])
+    delta_days = float(event_first_jd - reference_jd)
+
+    diagnostic["event_first_minus_t0_reference_days"] = delta_days
+
+    if np.isclose(
+        event_first_jd,
+        reference_jd,
+        rtol=0.0,
+        atol=atol_days,
+    ):
+        diagnostic["t0_reference_check_status"] = "ok_exact"
+        return diagnostic
+
+    if event_first_jd < reference_jd - atol_days:
+        message = (
+            "El primer timestamp retenido en pyLIMA es anterior al "
+            "timestamp MAF usado como origen de t0. Esto sí es inconsistente. "
+            f"event_first_jd_after_filters={event_first_jd:.9f}, "
+            f"t0_reference_jd={reference_jd:.9f}, "
+            f"delta_days={delta_days:.9f}."
+        )
+
+        diagnostic["t0_reference_check_status"] = (
+            "error_event_starts_before_reference"
+        )
+        diagnostic["t0_reference_check_message"] = message
+
+        raise RuntimeError(message)
+
+    message = (
+        "El primer timestamp retenido en pyLIMA es posterior al timestamp MAF "
+        "usado como origen de t0. Esto puede ocurrir si el filtro fotométrico "
+        "m5/5sigma descarta los primeros puntos visibles. "
+        f"event_first_jd_after_filters={event_first_jd:.9f}, "
+        f"t0_reference_jd={reference_jd:.9f}, "
+        f"delta_days={delta_days:.9f}, "
+        f"first_band={event_time_info.get('event_first_band_after_filters', '')}."
+    )
+
+    diagnostic["t0_reference_check_status"] = "warning_event_starts_later"
+    diagnostic["t0_reference_check_message"] = message
+
+    if strict_equality:
+        raise RuntimeError(message)
+
+    print("[warning]", message)
+
+    return diagnostic
+
+
 def build_event_fit_window(base_row):
     """
     Return the absolute-JD interval applied only to the fit arrays.
@@ -2252,6 +2882,11 @@ def build_event_fit_window(base_row):
 
     If the option is disabled, return None and use the complete light curve.
     """
+
+    validate_t0_first_maf_timestamp(
+        base_row,
+        context="build_event_fit_window",
+    )
 
     if not FIT_WINDOW_ENABLED:
         return None
@@ -2270,6 +2905,11 @@ def fixed_param_samplers(base_row, task):
     """
     Force the catalog event and the selected parallax orientation.
     """
+
+    validate_t0_first_maf_timestamp(
+        base_row,
+        context="fixed_param_samplers",
+    )
 
     return {
         "star_mass": {
@@ -2316,6 +2956,11 @@ def fixed_param_samplers(base_row, task):
 
 
 def task_metadata(base_row, task):
+    validate_t0_first_maf_timestamp(
+        base_row,
+        context="task_metadata",
+    )
+
     fit_window = build_event_fit_window(base_row)
 
     metadata = {
@@ -2346,6 +2991,24 @@ def task_metadata(base_row, task):
         "t0_reference_mjd": float(
             base_row.get("t0_reference_mjd", np.nan)
         ),
+        "t0_reference_raw_first_maf_jd": float(
+            base_row.get("t0_reference_raw_first_maf_jd", np.nan)
+        ),
+        "t0_reference_first_filter": str(
+            base_row.get("t0_reference_first_filter", "")
+        ),
+        "t0_reference_visible_bands": str(
+            base_row.get("t0_reference_visible_bands", "")
+        ),
+        "t0_reference_band_availability_mode": str(
+            base_row.get("t0_reference_band_availability_mode", "")
+        ),
+        "t0_reference_n_obs_raw": float(
+            base_row.get("t0_reference_n_obs_raw", np.nan)
+        ),
+        "t0_reference_n_obs_visible_bands": float(
+            base_row.get("t0_reference_n_obs_visible_bands", np.nan)
+        ),
         "t0_jd_original_global_zero": float(
             base_row.get("t0_jd_original_global_zero", np.nan)
         ),
@@ -2367,13 +3030,23 @@ def task_metadata(base_row, task):
         "source_fraction_i": float(base_row["blend_i"]),
         "source_fraction_z": float(base_row["blend_z"]),
         "source_fraction_y": float(base_row["blend_y"]),
+        "DetectionFlag_u": float(base_row.get("DetectionFlag_u", np.nan)),
+        "DetectionFlag_g": float(base_row.get("DetectionFlag_g", np.nan)),
+        "DetectionFlag_r": float(base_row.get("DetectionFlag_r", np.nan)),
+        "DetectionFlag_i": float(base_row.get("DetectionFlag_i", np.nan)),
+        "DetectionFlag_z": float(base_row.get("DetectionFlag_z", np.nan)),
+        "DetectionFlag_y": float(base_row.get("DetectionFlag_y", np.nan)),
         "catalog_visible_filter_count": int(
             base_row["catalog_visible_filter_count"]
         ),
+        "catalog_available_bands": str(
+            base_row.get("catalog_available_bands", "")
+        ),
+        "catalog_band_availability_mode": BAND_AVAILABILITY_MODE,
         "catalog_zero_fraction_bands": ",".join(
             band
             for band, column in zip(
-                ("u", "g", "r", "i", "z", "y"),
+                CATALOG_BANDS,
                 BLEND_COLUMNS,
             )
             if float(base_row[column]) == 0.0
@@ -2408,6 +3081,9 @@ def task_metadata(base_row, task):
             if FIT_WINDOW_ENABLED
             else np.nan
         ),
+        "apply_detection_criteria": APPLY_DETECTION_CRITERIA,
+        "apply_photometric_filter": APPLY_PHOTOMETRIC_FILTER,
+        "fit_bounds": json.dumps(FIT_BOUNDS_NOPIE, default=str),
         "fit_window_t_min_jd": (
             float(fit_window[0])
             if fit_window is not None
@@ -2464,13 +3140,19 @@ def add_metadata_to_result_parquets(
 # ============================================================================
 def apply_t0_from_first_maf_timestamp(base_row, config):
     """
-    Redefine t0_jd como:
+    Resolve t0_jd using the allowed convention:
 
-        t0_jd = primer timestamp Rubin/MAF usado por este evento
-                + t0_catalog_days
+        t0_jd = first relevant OpSim/MAF timestamp + t0_catalog_days
 
-    Usa el mismo dataSlice que después usará sim_event, incluyendo
-    rubin_pointing_mode='source' y rubin_cache_cell_deg.
+    Relevant means:
+        - same coordinate / Rubin pointing mode as the simulation;
+        - only bands available for this catalog event.
+
+    With sedighe.band_availability='detection_flag', the reference timestamp
+    is computed using only filters with DetectionFlag_band == 1.
+
+    The photometric m5/5-sigma filter is not used to define this reference,
+    because the simulated magnification is needed before that filter exists.
     """
 
     import set_telescopes_pyLIMA as stp
@@ -2479,11 +3161,42 @@ def apply_t0_from_first_maf_timestamp(base_row, config):
 
     if not bool(config.get("use_rubin", True)):
         raise RuntimeError(
-            "t0_from_first_maf_timestamp requiere use_rubin=True."
+            "t0_origin=first_maf_timestamp requiere use_rubin=True."
+        )
+
+    if "t0_catalog_days" not in base_row.index:
+        raise RuntimeError(
+            "Falta t0_catalog_days; no puedo construir t0_jd desde el "
+            "primer timestamp OpSim/MAF."
+        )
+
+    t0_catalog_days = float(base_row["t0_catalog_days"])
+
+    if not np.isfinite(t0_catalog_days):
+        raise RuntimeError(
+            f"t0_catalog_days no finito: {t0_catalog_days}."
+        )
+
+    if t0_catalog_days < 0.0:
+        raise RuntimeError(
+            "t0_catalog_days es negativo. Para esta convención debe ser "
+            "un tiempo positivo medido desde el primer timestamp OpSim/MAF "
+            f"del campo. Valor={t0_catalog_days}."
         )
 
     source_ra = float(base_row["ra"])
     source_dec = float(base_row["dec"])
+
+    visible_bands = _visible_bands_from_row(
+        base_row,
+        mode=BAND_AVAILABILITY_MODE,
+    )
+
+    if len(visible_bands) == 0:
+        raise RuntimeError(
+            "No hay bandas visibles según "
+            f"band_availability={BAND_AVAILABILITY_MODE}."
+        )
 
     _, dataSlice, _ = stp.tel_roman_rubin(
         config["path_ephemerides"],
@@ -2501,6 +3214,14 @@ def apply_t0_from_first_maf_timestamp(base_row, config):
             "No hay observaciones Rubin/MAF para calcular el primer timestamp."
         )
 
+    if "observationStartMJD" not in dataSlice.dtype.names:
+        raise RuntimeError(
+            "dataSlice no contiene la columna observationStartMJD; "
+            "no puedo definir el origen local de t0."
+        )
+
+    filter_column = _find_dataslice_filter_column(dataSlice)
+
     mjd = np.asarray(
         dataSlice["observationStartMJD"],
         dtype=float,
@@ -2508,26 +3229,86 @@ def apply_t0_from_first_maf_timestamp(base_row, config):
 
     jd = mjd + 2400000.5
 
-    finite = jd[np.isfinite(jd)]
+    filters = np.asarray(
+        [
+            _canonical_maf_filter(value)
+            for value in dataSlice[filter_column]
+        ],
+        dtype=str,
+    )
+
+    finite_mask = np.isfinite(jd)
+    finite = jd[finite_mask]
 
     if len(finite) == 0:
         raise RuntimeError(
             "dataSlice no contiene observationStartMJD finitos."
         )
 
-    first_timestamp_jd = float(np.min(finite))
+    raw_first_timestamp_jd = float(np.min(finite))
 
-    old_t0_jd = float(base_row["t0_jd"])
-    new_t0_jd = first_timestamp_jd + float(base_row["t0_catalog_days"])
+    visible_mask = (
+        finite_mask
+        & np.isin(filters, visible_bands)
+    )
 
-    base_row["t0_jd_original_global_zero"] = old_t0_jd
+    visible_jd = jd[visible_mask]
+    visible_filters = filters[visible_mask]
+
+    if len(visible_jd) == 0:
+        raise RuntimeError(
+            "No hay observaciones MAF en las bandas visibles del catálogo. "
+            f"visible_bands={visible_bands}, "
+            f"available filters in dataSlice={sorted(set(filters.tolist()))}."
+        )
+
+    first_index = int(np.argmin(visible_jd))
+    first_timestamp_jd = float(visible_jd[first_index])
+    first_filter = str(visible_filters[first_index])
+
+    old_t0_jd = float(base_row.get("t0_jd", np.nan))
+
+    legacy_t0_jd = float(
+        base_row.get("t0_jd_original_global_zero", np.nan)
+    )
+
+    if not np.isfinite(legacy_t0_jd) and np.isfinite(old_t0_jd):
+        legacy_t0_jd = old_t0_jd
+
+    new_t0_jd = first_timestamp_jd + t0_catalog_days
+
+    base_row["t0_jd_original_global_zero"] = legacy_t0_jd
+    base_row["t0_reference_raw_first_maf_jd"] = raw_first_timestamp_jd
     base_row["t0_reference_jd"] = first_timestamp_jd
     base_row["t0_reference_mjd"] = first_timestamp_jd - 2400000.5
+    base_row["t0_reference_source"] = (
+        "min(dataSlice.observationStartMJD in catalog-visible bands)"
+    )
+    base_row["t0_reference_band_availability_mode"] = BAND_AVAILABILITY_MODE
+    base_row["t0_reference_visible_bands"] = ",".join(visible_bands)
+    base_row["t0_reference_first_filter"] = first_filter
+    base_row["t0_reference_n_obs_raw"] = int(len(finite))
+    base_row["t0_reference_n_obs_visible_bands"] = int(len(visible_jd))
+    base_row["t0_reference_n_obs"] = int(len(visible_jd))
     base_row["t0_origin"] = "first_maf_timestamp"
     base_row["t0_jd"] = new_t0_jd
 
+    validate_t0_first_maf_timestamp(
+        base_row,
+        context="apply_t0_from_first_maf_timestamp",
+    )
+
+    print(
+        "t0 convention applied: "
+        f"t0_jd={new_t0_jd:.8f} = "
+        f"first_visible_maf_jd={first_timestamp_jd:.8f} + "
+        f"t0_catalog_days={t0_catalog_days:.8f}. "
+        f"visible_bands={visible_bands}, first_filter={first_filter}, "
+        f"raw_first_maf_jd={raw_first_timestamp_jd:.8f}"
+    )
+
     return base_row
-    
+
 def run_single_event(task):
     config = GLOBAL_WORKER_CONFIG
     catalog = GLOBAL_PREPARED_CATALOG
@@ -2651,11 +3432,33 @@ def run_single_event(task):
                         "apply_detection_criteria"
                     ]
 
+                if "apply_photometric_filter" in sim_fit_parameters:
+                    sim_fit_kwargs["apply_photometric_filter"] = config[
+                        "apply_photometric_filter"
+                    ]
+                else:
+                    raise RuntimeError(
+                        "El config solicita controlar apply_photometric_filter, "
+                        "pero sim_fit no acepta ese argumento. Actualizá "
+                        "functions_roman_rubin.sim_fit antes de correr."
+                    )
+
+                print("apply_detection_criteria =", sim_fit_kwargs.get("apply_detection_criteria"))
+                print("apply_photometric_filter =", sim_fit_kwargs.get("apply_photometric_filter"))
+
                 result = sim_fit(
                     simulation_seed,
                     config["system_type"],
                     **sim_fit_kwargs,
                 )
+
+                t0_reference_diagnostic = validate_simulated_event_uses_t0_reference(
+                    result,
+                    base_row,
+                    strict_equality=False,
+                )
+
+                summary.update(t0_reference_diagnostic)
 
                 if isinstance(result, dict):
                     sim_status = str(result.get("status", ""))
@@ -2791,7 +3594,8 @@ def print_diagnostics(
     print(f"Total simulation tasks: {len(tasks)}")
     print(f"N workers:              {workers}")
     print(f"Config file:            {CONFIG_PATH}")
-    print(f"T0_ZERO_JD:             {T0_ZERO_JD}")
+    print("t0 origin policy:       first OpSim/MAF timestamp per field")
+    print(f"T0_ZERO_JD legacy:      {T0_ZERO_JD} (diagnostic only; not used for t0)")
     print(f"Catalog angle column:   {PARALLAX_ANGLE_COLUMN}")
     print("Angle interpretation:   xi column used directly")
     print(
@@ -2804,6 +3608,9 @@ def print_diagnostics(
         f"{PARALLAX_COMPONENT_CONVENTION}"
     )
     print("Simulation time range:  complete MAF cadence")
+    print(f"Detection criteria:    {APPLY_DETECTION_CRITERIA}")
+    print(f"Photometric filter:    {APPLY_PHOTOMETRIC_FILTER}")
+    print(f"Fit bounds:            {FIT_BOUNDS_NOPIE}")
     if FIT_WINDOW_ENABLED:
         print(
             "Fit-only window:      "
@@ -2813,6 +3620,7 @@ def print_diagnostics(
     else:
         print("Fit-only window:      disabled")
     print(f"Run directory:          {RUN_DIR}")
+    print(f"Band availability:      {BAND_AVAILABILITY_MODE}")
     print(f"Blending:               {BLENDING_ASSUMPTION}")
     print("=" * 80)
 
@@ -2968,6 +3776,13 @@ def main():
             "o usá apply_detection_criteria: true."
         )
 
+    if "apply_photometric_filter" not in sim_fit_parameters:
+        raise RuntimeError(
+            "El config controla simulation.apply_photometric_filter, "
+            "pero tu función sim_fit todavía no acepta ese argumento. "
+            "Propagalo por sim_fit -> simulate_event_for_fit -> sim_event."
+        )
+
     log_step("[main] Loading raw catalog ...")
     raw_catalog = load_raw_catalog(
         COLUMNS_FILE,
@@ -3064,7 +3879,12 @@ def main():
         "PARALLAX_ANGLE_BASIS": PARALLAX_ANGLE_BASIS,
         "PARALLAX_COMPONENT_CONVENTION":
             PARALLAX_COMPONENT_CONVENTION,
-        "T0_ZERO_JD": T0_ZERO_JD,
+        "T0_ORIGIN_POLICY": T0_ORIGIN_POLICY,
+        "T0_DEFINITION": (
+            "t0_jd = first OpSim/MAF timestamp in catalog-visible "
+            "bands for selected field + t0_catalog_days"
+        ),
+        "T0_ZERO_JD_LEGACY_DIAGNOSTIC_ONLY": T0_ZERO_JD,
         "MAX_BASE_EVENTS": max_base_events,
         "READ_NROWS": read_nrows,
         "N_BASE_EVENTS_SELECTED":
@@ -3078,6 +3898,8 @@ def main():
         "FIT_PARALLAX": FIT_PARALLAX,
         "APPLY_DETECTION_CRITERIA":
             APPLY_DETECTION_CRITERIA,
+        "APPLY_PHOTOMETRIC_FILTER":
+            APPLY_PHOTOMETRIC_FILTER,
         "ALGO": ALGO,
         "USE_ROMAN": USE_ROMAN,
         "USE_RUBIN": USE_RUBIN,
@@ -3096,6 +3918,8 @@ def main():
             "[t0-k*tE, t0+k*tE] in absolute JD, fit only",
         "BLENDING_ASSUMPTION":
             BLENDING_ASSUMPTION,
+        "BAND_AVAILABILITY_MODE":
+            BAND_AVAILABILITY_MODE,
         "BLENDING_ZERO_MEANS_UNAVAILABLE_FILTER":
             BLENDING_ZERO_MEANS_UNAVAILABLE_FILTER,
         "BLENDING_MINIMUM_VISIBLE_FILTERS":
@@ -3165,6 +3989,10 @@ def main():
             RUBIN_CACHE_CELL_DEG,
         "apply_detection_criteria":
             APPLY_DETECTION_CRITERIA,
+        "apply_photometric_filter":
+            APPLY_PHOTOMETRIC_FILTER,
+        "band_availability_mode":
+            BAND_AVAILABILITY_MODE,
         "fit_window_enabled": FIT_WINDOW_ENABLED,
         "fit_window_half_width_tE": FIT_WINDOW_HALF_WIDTH_TE,
         "fit_window_minimum_total_points":
