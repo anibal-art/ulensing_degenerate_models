@@ -57,9 +57,9 @@
     "apply_photometric_filter": true
   },
   "rubin": {
-    "sim_data_dir": "${HOME}/rubin_sim_data",
-    "opsim_db_path": "${RUBIN_SIM_DATA_DIR}/sim_baseline/baseline_v5.3.5_10yrs.db",
-    "throughputs_dir": "${RUBIN_SIM_DATA_DIR}/throughputs/baseline"
+    "sim_data_dir": "/home/anibal-pc/rubin_sim_data",
+    "opsim_db_path": "/home/anibal-pc/rubin_sim_data/sim_baseline/baseline_v5.3.5_10yrs.db",
+    "throughputs_dir": "/home/anibal-pc/rubin_sim_data/throughputs/baseline"
   },
   "sedighe": {
     "angle_column": "xi",

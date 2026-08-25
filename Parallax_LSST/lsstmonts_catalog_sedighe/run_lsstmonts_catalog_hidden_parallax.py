@@ -45,13 +45,13 @@ No source file in the Roman-Rubin pipeline is overwritten.
 
 Usage
 -----
-    python run_lsstmonts_catalog_sedighe_xi.py \
-        --config lsstmonts_catalog_sedighe_xi.yaml
+    python run_lsstmonts_catalog_hidden_parallax.py \
+        --config config_lsstmonts_baseline_v5p3p5.json
 
 Preparation/validation only
 ---------------------------
-    python run_lsstmonts_catalog_sedighe_xi.py \
-        --config lsstmonts_catalog_sedighe_xi.yaml \
+    python run_lsstmonts_catalog_hidden_parallax.py \
+        --config config_lsstmonts_baseline_v5p3p5.json \
         --prepare-only
 """
 
@@ -477,10 +477,45 @@ def first_config_value(*values, default=None):
     return default
 
 
-def resolve_config_path(value, default=None):
+def _expand_config_variables(value, extra_env=None):
+    """
+    Expande ~, variables de entorno y placeholders tipo ${VAR}.
+
+    A diferencia de os.path.expandvars, permite pasar variables extra
+    que todavía no están necesariamente en os.environ. Esto es útil para
+    paths como:
+
+        ${RUBIN_SIM_DATA_DIR}/sim_baseline/baseline_v5.3.5_10yrs.db
+
+    dentro del config.
+    """
+
+    text = os.path.expanduser(str(value))
+
+    env = dict(os.environ)
+    env.setdefault("HOME", str(HOME))
+
+    if extra_env is not None:
+        env.update({
+            str(key): str(val)
+            for key, val in extra_env.items()
+            if val not in (None, "")
+        })
+
+    # Sustitución explícita de ${VAR}.
+    for key, val in env.items():
+        text = text.replace("${" + key + "}", str(val))
+
+    # Fallback para $VAR.
+    text = os.path.expandvars(text)
+
+    return text
+
+
+def resolve_config_path(value, default=None, extra_env=None):
     """
     Expand ~ and environment variables. Relative paths are interpreted
-    relative to the YAML file, not relative to the current shell directory.
+    relative to the config file, not relative to the current shell directory.
     """
 
     if value is None:
@@ -489,8 +524,9 @@ def resolve_config_path(value, default=None):
     if value is None:
         return None
 
-    expanded = os.path.expandvars(
-        os.path.expanduser(str(value))
+    expanded = _expand_config_variables(
+        value,
+        extra_env=extra_env,
     )
 
     path = Path(expanded)
@@ -502,20 +538,35 @@ def resolve_config_path(value, default=None):
 
 
 def configure_environment_from_config():
-    mapping = {
-        "project_base": "PARALLAX_LSST_BASE",
-        "roman_rubin_dir": "ROMAN_RUBIN_DIR",
-        "rubin_sim_data_dir": "RUBIN_SIM_DATA_DIR",
-        "roman_ephemerides": "ROMAN_EPHEMERIDES",
-    }
+    """
+    Exporta variables de entorno básicas desde el config.
 
-    for yaml_key, env_key in mapping.items():
-        value = cfg("paths", yaml_key)
+    Los paths de Rubin se terminan de resolver en configure_rubin_paths(),
+    porque pueden depender unos de otros, por ejemplo:
+        rubin.opsim_db_path = ${RUBIN_SIM_DATA_DIR}/...
+    """
+
+    mapping = [
+        ("paths", "project_base", "PARALLAX_LSST_BASE"),
+        ("paths", "roman_rubin_dir", "ROMAN_RUBIN_DIR"),
+        ("paths", "roman_ephemerides", "ROMAN_EPHEMERIDES"),
+        # Alias backward-compatible: si el config viejo lo tiene en paths,
+        # lo copiamos a RUBIN_SIM_DATA_DIR.
+        ("paths", "rubin_sim_data_dir", "RUBIN_SIM_DATA_DIR"),
+        # Nuevo esquema recomendado.
+        ("rubin", "sim_data_dir", "RUBIN_SIM_DATA_DIR"),
+    ]
+
+    for section, key, env_key in mapping:
+        value = cfg(section, key)
 
         if value not in (None, ""):
             os.environ[env_key] = str(
                 resolve_config_path(value)
             )
+
+            if env_key == "RUBIN_SIM_DATA_DIR":
+                os.environ["SIMS_DATA_DIR"] = os.environ[env_key]
 
 
 configure_environment_from_config()
@@ -555,8 +606,7 @@ def configure_opsim_from_config():
     return path
 
 
-configure_opsim_from_config()
-
+# La OpSim y los throughputs se configuran juntos más abajo, luego de resolver BASE_DIR.
 
 def find_project_base():
     env = os.environ.get("PARALLAX_LSST_BASE", "").strip()
@@ -616,46 +666,173 @@ def find_roman_rubin_dir(base_dir):
     )
 
 
-def configure_rubin_sim_data(base_dir):
+def configure_rubin_paths(base_dir=None, validate=True):
     """
-    Find a Rubin data directory containing the throughput tables and configure
-    both environment-variable names used by different rubin_sim versions.
+    Configura todos los paths de Rubin desde el config.
+
+    Nuevo esquema recomendado en JSON/YAML:
+
+        rubin:
+          sim_data_dir: ${HOME}/rubin_sim_data
+          opsim_db_path: ${RUBIN_SIM_DATA_DIR}/sim_baseline/baseline_v5.3.5_10yrs.db
+          throughputs_dir: ${RUBIN_SIM_DATA_DIR}/throughputs/baseline
+
+    No busca automáticamente bajo /home ni bajo el repo. Para correr en un
+    cluster, cambiá solo el config o exportá las variables de entorno.
     """
 
-    env_candidates = [
-        os.environ.get("RUBIN_SIM_DATA_DIR", "").strip(),
-        os.environ.get("SIMS_DATA_DIR", "").strip(),
-    ]
-
-    candidates = [
-        Path(value).expanduser() for value in env_candidates if value
-    ]
-
-    candidates.extend(
-        [
-            HOME / "rubin_sim_data",
-            HOME / "rubin_sim" / "rubin_sim_data",
-            base_dir / "rubin_sim_data",
-            base_dir.parent / "rubin_sim_data",
-            HOME / "ulensing_degenerate_models" / "rubin_sim_data",
-            HOME / "microlensing" / "rubin_sim_data",
-        ]
+    sim_data_value = first_config_value(
+        cfg("rubin", "sim_data_dir", None),
+        cfg("paths", "rubin_sim_data_dir", None),
+        os.environ.get("RUBIN_SIM_DATA_DIR", ""),
+        os.environ.get("SIMS_DATA_DIR", ""),
+        default=None,
     )
 
-    for candidate in candidates:
-        candidate = candidate.resolve()
+    if sim_data_value in (None, "", "default", "auto"):
+        raise FileNotFoundError(
+            "No está definido rubin.sim_data_dir en el config.\n"
+            "Agregá, por ejemplo:\n"
+            "  rubin.sim_data_dir: ${HOME}/rubin_sim_data\n"
+            "o exportá RUBIN_SIM_DATA_DIR=/ruta/a/rubin_sim_data."
+        )
 
-        required = candidate / "throughputs" / "baseline" / "total_u.dat"
+    rubin_sim_data_dir = resolve_config_path(sim_data_value)
 
-        if required.exists():
-            os.environ["RUBIN_SIM_DATA_DIR"] = str(candidate)
-            os.environ["SIMS_DATA_DIR"] = str(candidate)
-            return candidate
+    os.environ["RUBIN_SIM_DATA_DIR"] = str(rubin_sim_data_dir)
+    os.environ["SIMS_DATA_DIR"] = str(rubin_sim_data_dir)
 
-    raise FileNotFoundError(
-        "No pude encontrar rubin_sim_data/throughputs/baseline/total_u.dat.\n"
-        "Definí RUBIN_SIM_DATA_DIR o SIMS_DATA_DIR con la ruta correcta."
+    extra_env = {
+        "RUBIN_SIM_DATA_DIR": rubin_sim_data_dir,
+        "SIMS_DATA_DIR": rubin_sim_data_dir,
+    }
+
+    throughputs_value = first_config_value(
+        cfg("rubin", "throughputs_dir", None),
+        cfg("paths", "rubin_throughputs_dir", None),
+        os.environ.get("RUBIN_THROUGHPUTS_DIR", ""),
+        default=None,
     )
+
+    if throughputs_value in (None, "", "default", "auto"):
+        rubin_throughputs_dir = (
+            rubin_sim_data_dir
+            / "throughputs"
+            / "baseline"
+        ).resolve()
+    else:
+        rubin_throughputs_dir = resolve_config_path(
+            throughputs_value,
+            extra_env=extra_env,
+        )
+
+    os.environ["RUBIN_THROUGHPUTS_DIR"] = str(rubin_throughputs_dir)
+
+    extra_env["RUBIN_THROUGHPUTS_DIR"] = rubin_throughputs_dir
+
+    opsim_value = first_config_value(
+        cfg("rubin", "opsim_db_path", None),
+        cfg("simulation", "opsim_db_path", None),
+        cfg("paths", "opsim_db_path", None),
+        os.environ.get("RUBIN_OPSIM_DB_PATH", ""),
+        os.environ.get("RUBIN_OPSIM_DB", ""),
+        default=None,
+    )
+
+    if opsim_value in (None, "", "default", "auto"):
+        raise FileNotFoundError(
+            "No está definido rubin.opsim_db_path en el config.\n"
+            "Agregá, por ejemplo:\n"
+            "  rubin.opsim_db_path: "
+            "${RUBIN_SIM_DATA_DIR}/sim_baseline/baseline_v5.3.5_10yrs.db"
+        )
+
+    rubin_opsim_db_path = resolve_config_path(
+        opsim_value,
+        extra_env=extra_env,
+    )
+
+    os.environ["RUBIN_OPSIM_DB_PATH"] = str(rubin_opsim_db_path)
+    os.environ["RUBIN_OPSIM_DB"] = str(rubin_opsim_db_path)
+
+    if validate:
+        if not rubin_sim_data_dir.exists():
+            raise FileNotFoundError(
+                f"No existe rubin.sim_data_dir: {rubin_sim_data_dir}"
+            )
+
+        if not rubin_throughputs_dir.exists():
+            raise FileNotFoundError(
+                f"No existe rubin.throughputs_dir: {rubin_throughputs_dir}"
+            )
+
+        missing = []
+        for band in "ugrizy":
+            throughput_file = rubin_throughputs_dir / f"total_{band}.dat"
+            throughput_file_gz = rubin_throughputs_dir / f"total_{band}.dat.gz"
+            if not throughput_file.exists() and not throughput_file_gz.exists():
+                missing.append(str(throughput_file))
+
+        if missing:
+            raise FileNotFoundError(
+                "Faltan archivos de throughput Rubin:\n"
+                + "\n".join(missing)
+            )
+
+        if not rubin_opsim_db_path.exists():
+            raise FileNotFoundError(
+                f"No existe rubin.opsim_db_path: {rubin_opsim_db_path}"
+            )
+
+    print(f"[config] RUBIN_SIM_DATA_DIR    = {rubin_sim_data_dir}", flush=True)
+    print(f"[config] RUBIN_THROUGHPUTS_DIR = {rubin_throughputs_dir}", flush=True)
+    print(f"[config] RUBIN_OPSIM_DB_PATH   = {rubin_opsim_db_path}", flush=True)
+
+    return rubin_sim_data_dir, rubin_throughputs_dir, rubin_opsim_db_path
+
+
+def configure_set_telescopes_module(
+    rubin_sim_data_dir,
+    rubin_throughputs_dir,
+    rubin_opsim_db_path,
+    reset_caches=True,
+):
+    """
+    Configura set_telescopes_pyLIMA si la versión instalada expone
+    configure_rubin_paths(). Si no, deja las variables de entorno seteadas.
+    """
+
+    os.environ["RUBIN_SIM_DATA_DIR"] = str(rubin_sim_data_dir)
+    os.environ["SIMS_DATA_DIR"] = str(rubin_sim_data_dir)
+    os.environ["RUBIN_THROUGHPUTS_DIR"] = str(rubin_throughputs_dir)
+    os.environ["RUBIN_OPSIM_DB_PATH"] = str(rubin_opsim_db_path)
+    os.environ["RUBIN_OPSIM_DB"] = str(rubin_opsim_db_path)
+
+    try:
+        import set_telescopes_pyLIMA as stp
+
+        if hasattr(stp, "configure_rubin_paths"):
+            stp.configure_rubin_paths(
+                rubin_sim_data_dir=rubin_sim_data_dir,
+                rubin_throughputs_dir=rubin_throughputs_dir,
+                rubin_opsim_db_path=rubin_opsim_db_path,
+                reset_caches=reset_caches,
+                validate=True,
+            )
+        else:
+            print(
+                "[warning] set_telescopes_pyLIMA no expone "
+                "configure_rubin_paths(). Se usarán solo variables de entorno. "
+                "Actualizá set_telescopes_pyLIMA.py para evitar paths hardcodeados.",
+                flush=True,
+            )
+
+    except ImportError as error:
+        print(
+            "[warning] todavía no pude importar set_telescopes_pyLIMA "
+            f"para configurarlo: {error!r}",
+            flush=True,
+        )
 
 
 def find_ephemerides(roman_rubin_dir):
@@ -684,11 +861,22 @@ def find_ephemerides(roman_rubin_dir):
 
 
 BASE_DIR = find_project_base()
-RUBIN_SIM_DATA_DIR = configure_rubin_sim_data(BASE_DIR)
+(
+    RUBIN_SIM_DATA_DIR,
+    RUBIN_THROUGHPUTS_DIR,
+    RUBIN_OPSIM_DB_PATH,
+) = configure_rubin_paths(BASE_DIR)
 ROMAN_RUBIN_DIR = find_roman_rubin_dir(BASE_DIR)
 PATH_EPHEMERIDES = find_ephemerides(ROMAN_RUBIN_DIR)
 
 sys.path.insert(0, str(ROMAN_RUBIN_DIR))
+
+configure_set_telescopes_module(
+    rubin_sim_data_dir=RUBIN_SIM_DATA_DIR,
+    rubin_throughputs_dir=RUBIN_THROUGHPUTS_DIR,
+    rubin_opsim_db_path=RUBIN_OPSIM_DB_PATH,
+    reset_caches=True,
+)
 
 import functions_roman_rubin as frr  # noqa: E402
 sim_fit = frr.sim_fit
@@ -1866,6 +2054,13 @@ def init_worker(prepared_catalog, worker_config):
 
     GLOBAL_PREPARED_CATALOG = prepared_catalog
     GLOBAL_WORKER_CONFIG = worker_config
+
+    configure_set_telescopes_module(
+        rubin_sim_data_dir=worker_config["rubin_sim_data_dir"],
+        rubin_throughputs_dir=worker_config["rubin_throughputs_dir"],
+        rubin_opsim_db_path=worker_config["rubin_opsim_db_path"],
+        reset_caches=False,
+    )
 
     install_runtime_patches()
 
@@ -3670,16 +3865,30 @@ def apply_t0_from_first_maf_timestamp(base_row, config):
             f"band_availability={BAND_AVAILABILITY_MODE}."
         )
 
-    _, dataSlice, _ = stp.tel_roman_rubin(
-        config["path_ephemerides"],
-        time_window=None,
-        use_roman=bool(config.get("use_roman", False)),
-        use_rubin=bool(config.get("use_rubin", True)),
-        Ra=source_ra,
-        Dec=source_dec,
-        rubin_pointing_mode=config.get("rubin_pointing_mode", "source"),
-        rubin_cache_cell_deg=config.get("rubin_cache_cell_deg", None),
-    )
+    tel_kwargs = {
+        "path_ephemerides": config["path_ephemerides"],
+        "time_window": None,
+        "use_roman": bool(config.get("use_roman", False)),
+        "use_rubin": bool(config.get("use_rubin", True)),
+        "Ra": source_ra,
+        "Dec": source_dec,
+        "rubin_pointing_mode": config.get("rubin_pointing_mode", "source"),
+        "rubin_cache_cell_deg": config.get("rubin_cache_cell_deg", None),
+    }
+
+    tel_parameters = inspect.signature(stp.tel_roman_rubin).parameters
+
+    optional_rubin_path_kwargs = {
+        "opsim_db_path": config.get("rubin_opsim_db_path", None),
+        "rubin_sim_data_dir": config.get("rubin_sim_data_dir", None),
+        "rubin_throughputs_dir": config.get("rubin_throughputs_dir", None),
+    }
+
+    for key, value in optional_rubin_path_kwargs.items():
+        if key in tel_parameters and value not in (None, ""):
+            tel_kwargs[key] = value
+
+    _, dataSlice, _ = stp.tel_roman_rubin(**tel_kwargs)
 
     if dataSlice is None or len(dataSlice) == 0:
         raise RuntimeError(
@@ -3899,6 +4108,20 @@ def run_single_event(task):
 
                 sim_fit_parameters = inspect.signature(sim_fit).parameters
 
+                optional_sim_fit_path_kwargs = {
+                    "opsim_db_path": config.get("rubin_opsim_db_path", None),
+                    "rubin_sim_data_dir": config.get("rubin_sim_data_dir", None),
+                    "rubin_throughputs_dir": config.get("rubin_throughputs_dir", None),
+                }
+
+                for key, value in optional_sim_fit_path_kwargs.items():
+                    if key in sim_fit_parameters and value not in (None, ""):
+                        sim_fit_kwargs[key] = value
+
+                print("rubin_sim_data_dir =", config.get("rubin_sim_data_dir", ""))
+                print("rubin_throughputs_dir =", config.get("rubin_throughputs_dir", ""))
+                print("rubin_opsim_db_path =", config.get("rubin_opsim_db_path", ""))
+
                 if "apply_detection_criteria" in sim_fit_parameters:
                     sim_fit_kwargs["apply_detection_criteria"] = config[
                         "apply_detection_criteria"
@@ -4105,6 +4328,9 @@ def print_diagnostics(
     print(f"Run name base:          {RUN_NAME_BASE}")
     print(f"Chunk output label:     {CHUNK_OUTPUT_LABEL if CHUNK_OUTPUT_LABEL else '(none)'}")
     print(f"Run directory:          {RUN_DIR}")
+    print(f"Rubin sim data dir:     {RUBIN_SIM_DATA_DIR}")
+    print(f"Rubin throughputs dir:  {RUBIN_THROUGHPUTS_DIR}")
+    print(f"Rubin OpSim DB:         {RUBIN_OPSIM_DB_PATH}")
     print(f"Band availability:      {BAND_AVAILABILITY_MODE}")
     print(f"Blending:               {BLENDING_ASSUMPTION}")
     print("=" * 80)
@@ -4406,7 +4632,12 @@ def main():
         "RUBIN_SIM_DATA_DIR": str(
             RUBIN_SIM_DATA_DIR
         ),
-        "RUBIN_OPSIM_DB_PATH": os.environ.get("RUBIN_OPSIM_DB_PATH", ""),
+        "RUBIN_THROUGHPUTS_DIR": str(
+            RUBIN_THROUGHPUTS_DIR
+        ),
+        "RUBIN_OPSIM_DB_PATH": str(
+            RUBIN_OPSIM_DB_PATH
+        ),
         "PATH_EPHEMERIDES": str(
             PATH_EPHEMERIDES
         ),
@@ -4511,6 +4742,15 @@ def main():
         "algo": ALGO,
         "use_roman": USE_ROMAN,
         "use_rubin": USE_RUBIN,
+        "rubin_sim_data_dir": str(
+            RUBIN_SIM_DATA_DIR
+        ),
+        "rubin_throughputs_dir": str(
+            RUBIN_THROUGHPUTS_DIR
+        ),
+        "rubin_opsim_db_path": str(
+            RUBIN_OPSIM_DB_PATH
+        ),
         "path_ephemerides": str(
             PATH_EPHEMERIDES
         ),
