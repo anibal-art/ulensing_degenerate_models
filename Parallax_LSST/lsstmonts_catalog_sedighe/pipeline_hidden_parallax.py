@@ -1544,6 +1544,591 @@ def _make_dense_model_for_lightcurve(
     return dense_model, dense_parameters, dense_pyparams, A_dense
 
 
+
+# ============================================================
+# Caja de parámetros true/fit para figuras aligned_inset
+# ============================================================
+
+def _safe_float(value, default=np.nan):
+    """
+    Conversión robusta a float para textos de parámetros.
+    """
+    try:
+        if value is None:
+            return default
+
+        if isinstance(value, str):
+            if value.strip() == "" or value.strip().lower() in {"nan", "none"}:
+                return default
+
+        out = float(value)
+
+        return out
+
+    except Exception:
+        return default
+
+
+def _fmt_float(value, digits=4, sci=False, signed=False):
+    """
+    Formato compacto para la caja de parámetros.
+    """
+    value = _safe_float(value)
+
+    if not np.isfinite(value):
+        return r"--"
+
+    sign = "+" if signed else ""
+
+    if sci:
+        return rf"{value:{sign}.{digits}e}"
+
+    return rf"{value:{sign}.{digits}f}"
+
+
+def _fmt_days(value, digits=3):
+    value = _safe_float(value)
+
+    if not np.isfinite(value):
+        return r"--"
+
+    return rf"{value:.{digits}f}"
+
+
+def _parameter_box_get_chi2_from_fit_results(fit_rr):
+    """
+    Extrae chi2 del objeto fit_rr si está disponible.
+    """
+    if fit_rr is None:
+        return np.nan
+
+    try:
+        fit_results = getattr(fit_rr, "fit_results", {})
+        if isinstance(fit_results, dict):
+            for key in ["chi2", "chichi"]:
+                if key in fit_results:
+                    return _safe_float(fit_results[key])
+    except Exception:
+        pass
+
+    return np.nan
+
+
+def _parameter_box_best_dof(fit_model_obj, fit_model_parameters):
+    """
+    Estima dof = N_fit - N_params para mostrar chi2_red en la figura.
+    """
+    try:
+        n_data = int(sum(count_points_by_telescope(fit_model_obj).values()))
+        n_params = int(len(fit_model_parameters))
+        dof = n_data - n_params
+
+        if dof > 0:
+            return dof
+
+    except Exception:
+        pass
+
+    return np.nan
+
+
+def _parameter_box_get_fit_results_dict(fit_rr):
+    """
+    Devuelve fit_rr.fit_results si existe y es un diccionario.
+    """
+    if fit_rr is None:
+        return {}
+
+    try:
+        fit_results = getattr(fit_rr, "fit_results", {})
+        if isinstance(fit_results, dict):
+            return fit_results
+    except Exception:
+        pass
+
+    return {}
+
+
+def _parameter_box_parameter_names(fit_model_obj, fit_model_parameters=None):
+    """
+    Nombres de parámetros en el orden del vector best_model/covariance.
+    Se usa para ubicar rho en la matriz de covarianza.
+    """
+    try:
+        model_dict = getattr(fit_model_obj, "model_dictionnary", {})
+
+        if isinstance(model_dict, dict) and len(model_dict) > 0:
+            ordered = sorted(model_dict.items(), key=lambda item: item[1])
+            names = [str(name) for name, _ in ordered]
+
+            if fit_model_parameters is not None:
+                n = len(fit_model_parameters)
+                names = names[:n]
+
+            return names
+
+    except Exception:
+        pass
+
+    return []
+
+
+def _parameter_box_extract_rho_sigma(
+    fit_rr,
+    fit_model_obj,
+    fit_model_parameters,
+    fit_pyparams=None,
+):
+    """
+    Extrae sigma_rho del fit, preferentemente desde covariance_matrix.
+
+    Orden de búsqueda:
+      1. rho_err / sigma_rho en fit_results, si existe.
+      2. sqrt(covariance_matrix[rho_index, rho_index]), usando
+         fit_model_obj.model_dictionnary para ubicar rho.
+      3. rho_err en fit_pyparams, si existiera.
+
+    Devuelve un diccionario con sigma_rho y fuente diagnóstica.
+    """
+    out = {
+        "rho_err": np.nan,
+        "sigma_rho": np.nan,
+        "rho_err_source": "",
+        "rho_covariance_index": np.nan,
+        "rho_covariance_variance": np.nan,
+        "covariance_matrix_shape": "",
+        "covariance_parameter_names": "",
+    }
+
+    fit_results = _parameter_box_get_fit_results_dict(fit_rr)
+
+    # 1. Si el fitter ya guardó rho_err o sigma_rho.
+    for key in [
+        "rho_err",
+        "sigma_rho",
+        "rho_sigma",
+        "err_rho",
+        "rho_err_cov",
+    ]:
+        if key in fit_results:
+            val = _safe_float(fit_results.get(key))
+            if np.isfinite(val) and val >= 0.0:
+                out["rho_err"] = val
+                out["sigma_rho"] = val
+                out["rho_err_source"] = f"fit_results[{key}]"
+                return out
+
+    # 2. Matriz de covarianza.
+    covariance = None
+    covariance_key = None
+
+    for key in [
+        "covariance_matrix",
+        "covariance",
+        "covariance_mat",
+        "covariance_best_model",
+    ]:
+        if key in fit_results:
+            covariance = fit_results.get(key)
+            covariance_key = key
+            break
+
+    if covariance is not None:
+        try:
+            cov = np.asarray(covariance, dtype=float)
+            out["covariance_matrix_shape"] = str(cov.shape)
+
+            names = _parameter_box_parameter_names(
+                fit_model_obj=fit_model_obj,
+                fit_model_parameters=fit_model_parameters,
+            )
+            out["covariance_parameter_names"] = ",".join(names)
+
+            rho_index = None
+            if "rho" in names:
+                rho_index = names.index("rho")
+            else:
+                # Para FSPL sin paralaje el orden mínimo suele ser t0,u0,tE,rho.
+                if cov.ndim == 2 and cov.shape[0] > 3:
+                    rho_index = 3
+
+            if (
+                cov.ndim == 2
+                and cov.shape[0] == cov.shape[1]
+                and rho_index is not None
+                and 0 <= int(rho_index) < cov.shape[0]
+            ):
+                var = float(cov[int(rho_index), int(rho_index)])
+                out["rho_covariance_index"] = int(rho_index)
+                out["rho_covariance_variance"] = var
+
+                if np.isfinite(var) and var >= 0.0:
+                    sigma = float(np.sqrt(var))
+                    out["rho_err"] = sigma
+                    out["sigma_rho"] = sigma
+                    out["rho_err_source"] = f"sqrt({covariance_key}[rho,rho])"
+                    return out
+
+        except Exception:
+            pass
+
+    # 3. Fallback improbable: pyparams con rho_err.
+    if fit_pyparams is not None:
+        for key in ["rho_err", "sigma_rho", "rho_sigma", "err_rho"]:
+            if _has(fit_pyparams, key):
+                val = _safe_float(_val(fit_pyparams, key))
+                if np.isfinite(val) and val >= 0.0:
+                    out["rho_err"] = val
+                    out["sigma_rho"] = val
+                    out["rho_err_source"] = f"fit_pyparams.{key}"
+                    return out
+
+    return out
+
+
+def _extract_parameter_box_fit_diagnostics(
+    simfit_result,
+    fit_model_obj,
+    fit_model_parameters,
+    fit_pyparams=None,
+):
+    """
+    Extrae diagnósticos del ajuste para mostrar en la caja de parámetros.
+    No frena el plot si algo no está disponible.
+    """
+
+    diagnostics = {
+        "chi2_fit": np.nan,
+        "dof_fit": np.nan,
+        "chi2_red": np.nan,
+        "chi2_true": np.nan,
+        "delta_chi2_true": np.nan,
+        "rho_err": np.nan,
+        "sigma_rho": np.nan,
+        "sigma_rho_over_rho_fit": np.nan,
+        "sigma_rho_over_rho_true": np.nan,
+        "rho_err_source": "",
+        "rho_covariance_index": np.nan,
+        "rho_covariance_variance": np.nan,
+        "covariance_matrix_shape": "",
+        "covariance_parameter_names": "",
+    }
+
+    if not isinstance(simfit_result, dict):
+        return diagnostics
+
+    # Optional hard override injected by plot_aligned_inset_from_result().
+    # This is the safest route because the runner has already saved the
+    # formal pyLIMA quantities in results/fit_rr/fit_rr_*.parquet before
+    # the figure is generated.  In particular, chi2_true is usually there,
+    # not inside fit_pyparams.
+    override = simfit_result.get("plot_fit_diagnostics", None)
+    if isinstance(override, dict):
+        key_map = {
+            "chichi": "chi2_fit",
+            "chi2": "chi2_fit",
+            "chi2_fit": "chi2_fit",
+            "dof": "dof_fit",
+            "dof_fit": "dof_fit",
+            "chi2_red": "chi2_red",
+            "chi2_true": "chi2_true",
+            "true_chi2": "chi2_true",
+            "delta_chi2_true": "delta_chi2_true",
+            "delta_chi2": "delta_chi2_true",
+            "rho_err": "rho_err",
+            "sigma_rho": "sigma_rho",
+        }
+
+        for in_key, out_key in key_map.items():
+            if in_key in override:
+                value = _safe_float(override.get(in_key))
+                if np.isfinite(value):
+                    diagnostics[out_key] = value
+
+        if np.isfinite(diagnostics["rho_err"]):
+            diagnostics["sigma_rho"] = diagnostics["rho_err"]
+            diagnostics["rho_err_source"] = "fit_rr parquet"
+
+        # If override contains enough information, complete derived values.
+        if (
+            np.isfinite(diagnostics["chi2_fit"])
+            and np.isfinite(diagnostics["dof_fit"])
+            and diagnostics["dof_fit"] > 0
+            and not np.isfinite(diagnostics["chi2_red"])
+        ):
+            diagnostics["chi2_red"] = diagnostics["chi2_fit"] / diagnostics["dof_fit"]
+
+        if (
+            np.isfinite(diagnostics["chi2_fit"])
+            and np.isfinite(diagnostics["chi2_true"])
+            and not np.isfinite(diagnostics["delta_chi2_true"])
+        ):
+            diagnostics["delta_chi2_true"] = (
+                diagnostics["chi2_fit"] - diagnostics["chi2_true"]
+            )
+
+        if (
+            np.isfinite(diagnostics["chi2_fit"])
+            and np.isfinite(diagnostics["delta_chi2_true"])
+            and not np.isfinite(diagnostics["chi2_true"])
+        ):
+            diagnostics["chi2_true"] = (
+                diagnostics["chi2_fit"] - diagnostics["delta_chi2_true"]
+            )
+
+    fit_rr = simfit_result.get("fit_rr", None)
+    event_params = simfit_result.get("event_params", {})
+
+    rho_sigma_info = _parameter_box_extract_rho_sigma(
+        fit_rr=fit_rr,
+        fit_model_obj=fit_model_obj,
+        fit_model_parameters=fit_model_parameters,
+        fit_pyparams=fit_pyparams,
+    )
+    diagnostics.update(rho_sigma_info)
+
+    rho_fit_for_sigma = np.nan
+    if fit_pyparams is not None and _has(fit_pyparams, "rho"):
+        rho_fit_for_sigma = _safe_float(_val(fit_pyparams, "rho"))
+
+    rho_true_for_sigma = np.nan
+    event_params = simfit_result.get("event_params", {})
+    if isinstance(event_params, dict) and "rho" in event_params:
+        rho_true_for_sigma = _safe_float(event_params.get("rho"))
+
+    if np.isfinite(diagnostics["sigma_rho"]):
+        if np.isfinite(rho_fit_for_sigma) and rho_fit_for_sigma != 0.0:
+            diagnostics["sigma_rho_over_rho_fit"] = (
+                diagnostics["sigma_rho"] / abs(rho_fit_for_sigma)
+            )
+
+        if np.isfinite(rho_true_for_sigma) and rho_true_for_sigma != 0.0:
+            diagnostics["sigma_rho_over_rho_true"] = (
+                diagnostics["sigma_rho"] / abs(rho_true_for_sigma)
+            )
+
+    chi2_fit = np.nan
+
+    if fit_pyparams is not None and _has(fit_pyparams, "chi2"):
+        chi2_fit = _safe_float(_val(fit_pyparams, "chi2"))
+
+    if not np.isfinite(chi2_fit):
+        chi2_fit = _parameter_box_get_chi2_from_fit_results(fit_rr)
+
+    diagnostics["chi2_fit"] = chi2_fit
+
+    # dof normalmente no está en fit_results; lo estimamos.
+    dof_fit = _parameter_box_best_dof(
+        fit_model_obj=fit_model_obj,
+        fit_model_parameters=fit_model_parameters,
+    )
+
+    diagnostics["dof_fit"] = dof_fit
+
+    if np.isfinite(chi2_fit) and np.isfinite(dof_fit) and dof_fit > 0:
+        diagnostics["chi2_red"] = chi2_fit / dof_fit
+
+    # chi2_true / delta_chi2_true pueden existir a distintos niveles,
+    # dependiendo de la versión del runner.
+    for key in ["chi2_true", "true_chi2", "chi2_true_rr"]:
+        if key in simfit_result:
+            diagnostics["chi2_true"] = _safe_float(simfit_result.get(key))
+            break
+
+    for key in ["delta_chi2_true", "delta_chi2", "Delta_chi2"]:
+        if key in simfit_result:
+            diagnostics["delta_chi2_true"] = _safe_float(simfit_result.get(key))
+            break
+
+    # Intento desde event_params. En este pipeline chi2_true suele vivir
+    # en simfit_result["event_params"], porque viene de la curva simulada
+    # FSPL+parallax evaluada por el runner.
+    if isinstance(event_params, dict):
+        if not np.isfinite(diagnostics["chi2_true"]):
+            for key in ["chi2_true", "true_chi2", "chi2_true_rr"]:
+                if key in event_params:
+                    diagnostics["chi2_true"] = _safe_float(event_params.get(key))
+                    break
+
+        if not np.isfinite(diagnostics["delta_chi2_true"]):
+            for key in ["delta_chi2_true", "delta_chi2", "Delta_chi2"]:
+                if key in event_params:
+                    diagnostics["delta_chi2_true"] = _safe_float(event_params.get(key))
+                    break
+
+    # Intento adicional desde fit_results.
+    try:
+        fit_results = getattr(fit_rr, "fit_results", {})
+        if isinstance(fit_results, dict):
+            if not np.isfinite(diagnostics["delta_chi2_true"]):
+                for key in ["delta_chi2_true", "delta_chi2", "Delta_chi2"]:
+                    if key in fit_results:
+                        diagnostics["delta_chi2_true"] = _safe_float(fit_results[key])
+                        break
+
+            if not np.isfinite(diagnostics["chi2_true"]):
+                for key in ["chi2_true", "true_chi2", "chi2_true_rr"]:
+                    if key in fit_results:
+                        diagnostics["chi2_true"] = _safe_float(fit_results[key])
+                        break
+
+    except Exception:
+        pass
+
+    # Si tengo chi2_fit y delta, infiero chi2_true.
+    if (
+        np.isfinite(diagnostics["chi2_fit"])
+        and np.isfinite(diagnostics["delta_chi2_true"])
+        and not np.isfinite(diagnostics["chi2_true"])
+    ):
+        diagnostics["chi2_true"] = (
+            diagnostics["chi2_fit"]
+            - diagnostics["delta_chi2_true"]
+        )
+
+    # Si tengo chi2_fit y chi2_true, infiero delta.
+    if (
+        np.isfinite(diagnostics["chi2_fit"])
+        and np.isfinite(diagnostics["chi2_true"])
+        and not np.isfinite(diagnostics["delta_chi2_true"])
+    ):
+        diagnostics["delta_chi2_true"] = (
+            diagnostics["chi2_fit"]
+            - diagnostics["chi2_true"]
+        )
+
+    return diagnostics
+
+
+def _make_true_fit_parameter_box_text(
+    true_pyparams,
+    fit_pyparams,
+    fit_diagnostics=None,
+):
+    """
+    Construye el texto de parámetros true y fit para aligned_inset.
+    """
+
+    if fit_diagnostics is None:
+        fit_diagnostics = {}
+
+    t0_true = _safe_float(_val(true_pyparams, "t0"))
+    u0_true = _safe_float(_val(true_pyparams, "u0"))
+    tE_true = _safe_float(_val(true_pyparams, "tE"))
+    rho_true = _safe_float(_val(true_pyparams, "rho"))
+
+    piEN_true = _safe_float(_val(true_pyparams, "piEN"))
+    piEE_true = _safe_float(_val(true_pyparams, "piEE"))
+
+    if np.isfinite(piEN_true) and np.isfinite(piEE_true):
+        piE_true = float(np.hypot(piEN_true, piEE_true))
+    else:
+        piE_true = np.nan
+
+    t0_fit = _safe_float(_val(fit_pyparams, "t0"))
+    u0_fit = _safe_float(_val(fit_pyparams, "u0"))
+    tE_fit = _safe_float(_val(fit_pyparams, "tE"))
+    rho_fit = _safe_float(_val(fit_pyparams, "rho"))
+
+    chi2_red = _safe_float(fit_diagnostics.get("chi2_red", np.nan))
+    chi2_fit = _safe_float(fit_diagnostics.get("chi2_fit", np.nan))
+    chi2_true = _safe_float(fit_diagnostics.get("chi2_true", np.nan))
+    dof_fit = _safe_float(fit_diagnostics.get("dof_fit", np.nan))
+
+    # Usamos exclusivamente el chi2 formal de pyLIMA / runner, no el chi2
+    # recalculado en la escala alineada de la figura. La escala alineada usa
+    # flujos TRUE de referencia y no corresponde al likelihood del fit.
+    delta_chi2_display = _safe_float(
+        fit_diagnostics.get("delta_chi2_true", np.nan)
+    )
+
+    if (
+        not np.isfinite(delta_chi2_display)
+        and np.isfinite(chi2_fit)
+        and np.isfinite(chi2_true)
+    ):
+        delta_chi2_display = chi2_fit - chi2_true
+
+    sigma_rho = _safe_float(fit_diagnostics.get("sigma_rho", np.nan))
+    sigma_rho_over_rho_fit = _safe_float(
+        fit_diagnostics.get("sigma_rho_over_rho_fit", np.nan)
+    )
+    sigma_rho_over_rho_true = _safe_float(
+        fit_diagnostics.get("sigma_rho_over_rho_true", np.nan)
+    )
+
+    t0_offset = t0_fit - t0_true if np.isfinite(t0_fit) and np.isfinite(t0_true) else np.nan
+    tE_ratio = tE_fit / tE_true if np.isfinite(tE_fit) and np.isfinite(tE_true) and tE_true != 0 else np.nan
+    rho_ratio = rho_fit / rho_true if np.isfinite(rho_fit) and np.isfinite(rho_true) and rho_true > 0 else np.nan
+
+    text = (
+        r"$\bf{True:\ FSPL+parallax}$" "\n"
+        rf"$t_0={_fmt_days(t0_true, 3)}$" "\n"
+        rf"$u_0={_fmt_float(u0_true, 4)}$" "\n"
+        rf"$t_E={_fmt_float(tE_true, 3)}\,{{\rm d}}$" "\n"
+        rf"$\rho={_fmt_float(rho_true, 3, sci=True)}$" "\n"
+        rf"$\pi_{{E,N}}={_fmt_float(piEN_true, 4)}$" "\n"
+        rf"$\pi_{{E,E}}={_fmt_float(piEE_true, 4)}$" "\n"
+        rf"$\pi_E={_fmt_float(piE_true, 4)}$" "\n"
+        "\n"
+        r"$\bf{Fit:\ FSPL,\ no\ parallax}$" "\n"
+        rf"$t_0={_fmt_days(t0_fit, 3)}$" "\n"
+        rf"$u_0={_fmt_float(u0_fit, 4)}$" "\n"
+        rf"$t_E={_fmt_float(tE_fit, 3)}\,{{\rm d}}$" "\n"
+        rf"$\rho={_fmt_float(rho_fit, 3, sci=True)}$" "\n"
+        rf"$\sigma_{{\rho}}={_fmt_float(sigma_rho, 3, sci=True)}$" "\n"
+        rf"$\sigma_{{\rho}}/\rho_{{\rm fit}}={_fmt_float(sigma_rho_over_rho_fit, 3)}$" "\n"
+        rf"$\sigma_{{\rho}}/\rho_{{\rm true}}={_fmt_float(sigma_rho_over_rho_true, 3)}$" "\n"
+        "\n"
+        r"$\bf{Diagnostics}$" "\n"
+        rf"$\chi^2_{{\rm red}}={_fmt_float(chi2_red, 3)}$" "\n"
+        rf"$\chi^2_{{\rm fit}}={_fmt_float(chi2_fit, 2)}$" "\n"
+        rf"$\chi^2_{{\rm true}}={_fmt_float(chi2_true, 2)}$" "\n"
+        rf"${{\rm dof}}={_fmt_float(dof_fit, 0)}$" "\n"
+        rf"$\Delta\chi^2={_fmt_float(delta_chi2_display, 3)}$" "\n"
+        rf"$\Delta t_0={_fmt_float(t0_offset, 3, signed=True)}\,{{\rm d}}$" "\n"
+        rf"$t_{{E,\rm fit}}/t_{{E,\rm true}}={_fmt_float(tE_ratio, 3)}$" "\n"
+        rf"$\rho_{{\rm fit}}/\rho_{{\rm true}}={_fmt_float(rho_ratio, 3)}$"
+    )
+
+    return text
+
+
+def _add_true_fit_parameter_box(
+    fig,
+    true_pyparams,
+    fit_pyparams,
+    fit_diagnostics=None,
+    x=0.765,
+    y=0.50,
+    fontsize=7.5,
+):
+    """
+    Agrega caja de parámetros en el margen derecho de la figura.
+    """
+
+    text = _make_true_fit_parameter_box_text(
+        true_pyparams=true_pyparams,
+        fit_pyparams=fit_pyparams,
+        fit_diagnostics=fit_diagnostics,
+    )
+
+    fig.text(
+        x,
+        y,
+        text,
+        ha="left",
+        va="center",
+        fontsize=fontsize,
+        bbox=dict(
+            boxstyle="round",
+            facecolor="white",
+            edgecolor="0.55",
+            alpha=0.94,
+        ),
+    )
+
+
 # ============================================================
 # Trayectoria estilo widget
 # ============================================================
@@ -2095,6 +2680,8 @@ def plot_event_aligned_true_fit_with_widget_style_trajectory(
     force_true_parallax_reference_to_t0=True,
     show_true_no_parallax_reference=False,
     fit_trajectory_time_mode="own_fit_tE_window",
+    fit_diagnostics=None,
+    show_parameter_box=True,
 ):
     """
     Curva de luz + residuales + inset de trayectoria.
@@ -2235,9 +2822,33 @@ def plot_event_aligned_true_fit_with_widget_style_trajectory(
 
         band = str(tel.name)
 
+        time_arr = _to_numpy(tel.lightcurve["time"])
+        mag = _to_numpy(tel.lightcurve["mag"])
+        err_mag = _to_numpy(tel.lightcurve["err_mag"])
+
         A_fit_tel = fit_model_obj.model_magnification(
             tel,
             fit_pyparams,
+        )
+
+        # ------------------------------------------------------------
+        # True model evaluated on a fresh temporary pyLIMA telescope
+        # with the same times as the plotted data.
+        #
+        # Do NOT call:
+        #     true_model_obj.model_magnification(tel, true_pyparams)
+        # here, because tel belongs to fit_model_obj.  For parallax
+        # models this can trigger KeyError('photometry') since the
+        # telescope does not carry the true model's parallax cache.
+        # ------------------------------------------------------------
+        _, _, _, A_true_tel = _make_dense_model_for_lightcurve(
+            t_dense=time_arr,
+            band=band,
+            ra=ra,
+            dec=dec,
+            model_name=true_model_name,
+            parallax_model=true_parallax_model_for_plot,
+            pyparams=true_pyparams,
         )
 
         fsource_tel, fblend_tel = _get_flux_pair(
@@ -2255,10 +2866,6 @@ def plot_event_aligned_true_fit_with_widget_style_trajectory(
             )
             continue
 
-        time_arr = _to_numpy(tel.lightcurve["time"])
-        mag = _to_numpy(tel.lightcurve["mag"])
-        err_mag = _to_numpy(tel.lightcurve["err_mag"])
-
         flux_obs = _mag_to_flux_band(mag, band)
         err_flux_obs = _magerr_to_fluxerr(mag, err_mag, band)
 
@@ -2274,7 +2881,11 @@ def plot_event_aligned_true_fit_with_widget_style_trajectory(
         flux_fit_aligned = fsource_ref * A_fit_tel + fblend_ref
         mag_fit_aligned = _flux_to_mag_band(flux_fit_aligned, reference_band)
 
+        flux_true_aligned = fsource_ref * A_true_tel + fblend_ref
+        mag_true_aligned = _flux_to_mag_band(flux_true_aligned, reference_band)
+
         residual = mag_aligned - mag_fit_aligned
+        true_residual = mag_aligned - mag_true_aligned
 
         for k in range(len(time_arr)):
             row = {
@@ -2286,9 +2897,12 @@ def plot_event_aligned_true_fit_with_widget_style_trajectory(
                 "err_mag": float(err_mag_aligned[k]),
                 "err_mag_original": float(err_mag[k]),
                 "fit_mag_aligned": float(mag_fit_aligned[k]),
+                "true_mag_aligned": float(mag_true_aligned[k]),
                 "residual": float(residual[k]),
+                "true_residual": float(true_residual[k]),
                 "A_obs_equiv": float(A_obs_equiv[k]),
                 "A_fit": float(A_fit_tel[k]),
+                "A_true": float(A_true_tel[k]),
                 "fsource_true_band": float(fsource_tel),
                 "fblend_true_band": float(fblend_tel),
             }
@@ -2309,6 +2923,20 @@ def plot_event_aligned_true_fit_with_widget_style_trajectory(
 
     aligned_data = pd.DataFrame(rows)
     skipped_data = pd.DataFrame(skipped)
+
+    # ============================================================
+    # No recalculamos Delta chi2 desde la figura alineada.
+    #
+    # La escala alineada usa flujos TRUE de la banda de referencia y sirve
+    # solo para visualización. El criterio formal debe venir del chi2 de
+    # pyLIMA / runner: Delta chi2 = chi2_fit - chi2_true.
+    # Ese valor se extrae en _extract_parameter_box_fit_diagnostics().
+    # ============================================================
+
+    if fit_diagnostics is None:
+        fit_diagnostics = {}
+    else:
+        fit_diagnostics = dict(fit_diagnostics)
 
     if len(skipped_data) > 0:
         print("=" * 80)
@@ -2367,10 +2995,12 @@ def plot_event_aligned_true_fit_with_widget_style_trajectory(
 
     rho_true = float(_val(true_pyparams, "rho")) if _has(true_pyparams, "rho") else None
 
+    fig_width = 13.5 if show_parameter_box else 10.0
+
     fig, axes = plt.subplots(
         2,
         1,
-        figsize=(10, 7),
+        figsize=(fig_width, 7),
         dpi=130,
         sharex=True,
         gridspec_kw={"height_ratios": [3, 1]},
@@ -2499,7 +3129,21 @@ def plot_event_aligned_true_fit_with_widget_style_trajectory(
         numpoints=1,
     )
 
-    fig.tight_layout()
+    if show_parameter_box:
+        # Leave free space at the right for the parameter box.
+        fig.tight_layout(rect=[0.0, 0.0, 0.74, 1.0])
+
+        _add_true_fit_parameter_box(
+            fig=fig,
+            true_pyparams=true_pyparams,
+            fit_pyparams=fit_pyparams,
+            fit_diagnostics=fit_diagnostics,
+            x=0.765,
+            y=0.50,
+            fontsize=8.2,
+        )
+    else:
+        fig.tight_layout()
 
     dense = {
         "t_dense": t_dense,
@@ -2531,6 +3175,13 @@ def plot_event_aligned_true_fit_with_widget_style_trajectory(
         "rho_true": rho_true,
         "true_parallax_model_for_plot": true_parallax_model_for_plot,
         "fit_parallax_model_for_plot": fit_parallax_model_for_plot,
+        # Formal pyLIMA/runner chi2 diagnostics.
+        # Do not compute Delta chi2 from the aligned plotting scale.
+        "chi2_fit_pylima": fit_diagnostics.get("chi2_fit", np.nan),
+        "chi2_true_pylima": fit_diagnostics.get("chi2_true", np.nan),
+        "delta_chi2_pylima": fit_diagnostics.get("delta_chi2_true", np.nan),
+        "dof_fit_pylima": fit_diagnostics.get("dof_fit", np.nan),
+        "chi2_red_pylima": fit_diagnostics.get("chi2_red", np.nan),
         "fsource_ref_true": fsource_ref,
         "fblend_ref_true": fblend_ref,
         "reference_band": reference_band,
@@ -2540,6 +3191,135 @@ def plot_event_aligned_true_fit_with_widget_style_trajectory(
 
     return fig, axes, aligned_data, dense
 
+
+
+def _read_fit_rr_diagnostics_for_plot(save_path, simfit_result=None):
+    """
+    Read formal pyLIMA/runner diagnostics from the fit_rr parquet saved by
+    sim_fit/save_extracted_results immediately before plotting.
+
+    This avoids recomputing chi2 from the aligned plotting scale.  The plotted
+    aligned magnitudes use true fluxes for display, whereas pyLIMA's fit chi2
+    uses the original fitted flux parameters.  Therefore the formal Delta chi2
+    for the figure must come from fit_rr:
+
+        delta_chi2_true = chichi - chi2_true
+    """
+    out = {}
+
+    if save_path is None:
+        return out
+
+    save_path = Path(save_path)
+
+    # In this pipeline save_path is usually:
+    #   <out_dir>/plots/global_...png
+    # and the parquet lives in:
+    #   <out_dir>/results/fit_rr/fit_rr_manual_<seed>.parquet
+    try:
+        out_dir = save_path.parent.parent
+        fit_rr_dir = out_dir / "results" / "fit_rr"
+    except Exception:
+        return out
+
+    if not fit_rr_dir.exists():
+        return out
+
+    seeds = []
+
+    if isinstance(simfit_result, dict):
+        for key in ["i", "simulation_seed", "seed"]:
+            try:
+                value = simfit_result.get(key)
+                if value is not None and np.isfinite(float(value)):
+                    seeds.append(int(value))
+            except Exception:
+                pass
+
+        event_params = simfit_result.get("event_params", {})
+        if isinstance(event_params, dict):
+            for key in ["Source", "source", "simulation_seed", "seed"]:
+                try:
+                    value = event_params.get(key)
+                    if value is not None and np.isfinite(float(value)):
+                        seeds.append(int(value))
+                except Exception:
+                    pass
+
+    files = []
+
+    for seed in dict.fromkeys(seeds):
+        files.extend(sorted(fit_rr_dir.glob(f"fit_rr_*_{seed}.parquet")))
+
+    if len(files) == 0:
+        files = sorted(fit_rr_dir.glob("fit_rr_*.parquet"))
+
+    if len(files) == 0:
+        return out
+
+    # Prefer the newest file if there is any ambiguity.
+    files = sorted(files, key=lambda p: p.stat().st_mtime)
+    fit_file = files[-1]
+
+    try:
+        fit_df = pd.read_parquet(fit_file)
+        if len(fit_df) == 0:
+            return out
+
+        row = fit_df.iloc[0].to_dict()
+
+    except Exception:
+        return out
+
+    def get_first(keys):
+        for key in keys:
+            if key in row:
+                value = _safe_float(row.get(key))
+                if np.isfinite(value):
+                    return value
+        return np.nan
+
+    chi2_fit = get_first(["chichi", "chi2", "chi2_fit"])
+    chi2_true = get_first(["chi2_true", "true_chi2", "chi2_true_rr"])
+    delta_chi2 = get_first(["delta_chi2_true", "delta_chi2", "Delta_chi2"])
+    dof = get_first(["dof", "dof_fit"])
+    rho_err = get_first(["rho_err", "rho_err_cov", "sigma_rho"])
+
+    if not np.isfinite(delta_chi2) and np.isfinite(chi2_fit) and np.isfinite(chi2_true):
+        delta_chi2 = chi2_fit - chi2_true
+
+    chi2_red = np.nan
+    if np.isfinite(chi2_fit) and np.isfinite(dof) and dof > 0:
+        chi2_red = chi2_fit / dof
+
+    out.update(
+        {
+            "fit_rr_file_for_plot": str(fit_file),
+            "chi2_fit": chi2_fit,
+            "chichi": chi2_fit,
+            "chi2_true": chi2_true,
+            "delta_chi2_true": delta_chi2,
+            "dof_fit": dof,
+            "dof": dof,
+            "chi2_red": chi2_red,
+            "rho_err": rho_err,
+            "sigma_rho": rho_err,
+        }
+    )
+
+    print("=" * 80)
+    print("PARAMETER BOX FIT_RR DIAGNOSTICS")
+    print("=" * 80)
+    print("fit_rr_file       =", fit_file)
+    print("chi2_fit/chichi   =", chi2_fit)
+    print("chi2_true         =", chi2_true)
+    print("delta_chi2_true   =", delta_chi2)
+    print("dof               =", dof)
+    print("chi2_red          =", chi2_red)
+    print("rho_err           =", rho_err)
+    print("=" * 80)
+
+    return out
 
 def plot_aligned_inset_from_result(
     simfit_result,
@@ -2570,6 +3350,33 @@ def plot_aligned_inset_from_result(
     fit_model_parameters = obj["fit_model_parameters"]
     true_event_params = obj["true_event_params"]
 
+    # Compute fit pyLIMA parameters here only to extract diagnostics for the
+    # figure parameter box. The plotting function recomputes them internally.
+    try:
+        fit_pyparams_for_box = fit_model_obj.compute_pyLIMA_parameters(
+            fit_model_parameters,
+        )
+    except Exception:
+        fit_pyparams_for_box = None
+
+    # Read the formal chi2 diagnostics from the fit_rr parquet saved by the
+    # runner.  This is the value we want in the figure; do not recompute chi2
+    # from the aligned display magnitudes.
+    parquet_diagnostics = _read_fit_rr_diagnostics_for_plot(
+        save_path=save_path,
+        simfit_result=simfit_result,
+    )
+
+    if isinstance(parquet_diagnostics, dict) and len(parquet_diagnostics) > 0:
+        simfit_result["plot_fit_diagnostics"] = parquet_diagnostics
+
+    fit_diagnostics = _extract_parameter_box_fit_diagnostics(
+        simfit_result=simfit_result,
+        fit_model_obj=fit_model_obj,
+        fit_model_parameters=fit_model_parameters,
+        fit_pyparams=fit_pyparams_for_box,
+    )
+
     if global_i is None:
         global_i = simfit_result.get("global_i", simfit_result.get("i", np.nan))
 
@@ -2590,6 +3397,8 @@ def plot_aligned_inset_from_result(
         force_true_parallax_reference_to_t0=True,
         show_true_no_parallax_reference=show_true_no_parallax_reference,
         fit_trajectory_time_mode=fit_trajectory_time_mode,
+        fit_diagnostics=fit_diagnostics,
+        show_parameter_box=True,
     )
 
     tE = float(true_event_params["tE"])

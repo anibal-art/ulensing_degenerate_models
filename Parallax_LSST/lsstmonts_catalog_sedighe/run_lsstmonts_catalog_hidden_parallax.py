@@ -313,10 +313,13 @@ def piE_xi_to_piEN_piEE(
 
     return piEN, piEE
     
-def _early_config_path():
+def _parse_early_cli_args():
     """
-    Read --config before the remaining module-level configuration is built.
+    Read CLI options needed before module-level paths are built.
+
     parse_known_args() leaves the normal CLI arguments for main().
+    The chunk/output arguments are parsed early so each SLURM array task can
+    write to an independent subdirectory without needing a second config file.
     """
 
     parser = argparse.ArgumentParser(add_help=False)
@@ -326,9 +329,91 @@ def _early_config_path():
         default=str(DEFAULT_CONFIG_FILE),
     )
 
+    parser.add_argument(
+        "--catalog-row-start",
+        type=int,
+        default=None,
+    )
+
+    parser.add_argument(
+        "--catalog-row-stop",
+        type=int,
+        default=None,
+    )
+
+    parser.add_argument(
+        "--chunk-id",
+        default=None,
+    )
+
+    parser.add_argument(
+        "--run-name-suffix",
+        default=None,
+    )
+
     args, _ = parser.parse_known_args()
 
+    return args
+
+
+def _early_config_path():
+    args = _parse_early_cli_args()
     return Path(args.config).expanduser().resolve()
+
+
+def _sanitize_output_label(value):
+    """Return a conservative filesystem-safe output label."""
+
+    if value in (None, ""):
+        return ""
+
+    text = str(value).strip()
+    allowed = []
+
+    for char in text:
+        if char.isalnum() or char in {"_", "-", "."}:
+            allowed.append(char)
+        else:
+            allowed.append("_")
+
+    return "".join(allowed).strip("._-")
+
+
+def _early_chunk_output_label(args):
+    """
+    Determine the chunk subdirectory name from CLI arguments.
+
+    Priority:
+      1. explicit --run-name-suffix
+      2. explicit --chunk-id
+      3. row window label when --catalog-row-start/stop are given
+
+    If no chunk option is given, returns an empty string and the runner keeps
+    the original one-config, one-run directory behavior.
+    """
+
+    explicit = _sanitize_output_label(getattr(args, "run_name_suffix", None))
+
+    if explicit:
+        return explicit
+
+    chunk_id = getattr(args, "chunk_id", None)
+
+    if chunk_id not in (None, ""):
+        try:
+            return f"chunk_{int(chunk_id):06d}"
+        except Exception:
+            return "chunk_" + _sanitize_output_label(chunk_id)
+
+    start = getattr(args, "catalog_row_start", None)
+    stop = getattr(args, "catalog_row_stop", None)
+
+    if start is not None or stop is not None:
+        start_label = int(start) if start is not None else 0
+        stop_label = "end" if stop is None else f"{int(stop):07d}"
+        return f"rows_{start_label:07d}_{stop_label}"
+
+    return ""
 
 
 def _load_config(path):
@@ -361,7 +446,8 @@ def _load_config(path):
     return config
 
 
-CONFIG_PATH = _early_config_path()
+EARLY_CLI_ARGS = _parse_early_cli_args()
+CONFIG_PATH = Path(EARLY_CLI_ARGS.config).expanduser().resolve()
 CONFIG_DIR = CONFIG_PATH.parent
 CONFIG = _load_config(CONFIG_PATH)
 
@@ -633,13 +719,18 @@ DATA_FILE = resolve_config_path(
     default=DEFAULT_DATA_FILE,
 )
 
-RUN_NAME = str(
+RUN_NAME_BASE = str(
     first_config_value(
         topcfg("run_name", None),
         cfg("output", "run_name", None),
         default="LSSTMONTS_catalogXi_catalogBlending_FSPLparallax_fitFSPLNoPiE",
     )
 )
+
+# Keep one scientific config file.  For cluster jobs, each chunk writes to an
+# independent subdirectory under the same RUN_NAME_BASE.
+CHUNK_OUTPUT_LABEL = _early_chunk_output_label(EARLY_CLI_ARGS)
+RUN_NAME = RUN_NAME_BASE
 
 OUTPUT_ROOT = resolve_config_path(
     first_config_value(
@@ -650,7 +741,10 @@ OUTPUT_ROOT = resolve_config_path(
     default=BASE_DIR / "runs",
 )
 
-RUN_DIR = OUTPUT_ROOT / RUN_NAME
+if CHUNK_OUTPUT_LABEL:
+    RUN_DIR = OUTPUT_ROOT / RUN_NAME_BASE / CHUNK_OUTPUT_LABEL
+else:
+    RUN_DIR = OUTPUT_ROOT / RUN_NAME_BASE
 
 DIRS = {
     "catalogs": RUN_DIR / "catalogs",
@@ -832,6 +926,39 @@ def parse_optional_positive_int(value, name):
         raise ValueError(f"{name} debe ser positivo, None o 'all'.")
 
     return parsed
+
+
+def parse_optional_nonnegative_int(value, name):
+    if value is None:
+        return None
+
+    value = str(value).strip()
+
+    if value.lower() in {"all", "none", ""}:
+        return None
+
+    parsed = int(value)
+
+    if parsed < 0:
+        raise ValueError(f"{name} debe ser >= 0, None o 'all'.")
+
+    return parsed
+
+
+def resolve_catalog_row_window(start, stop):
+    start = parse_optional_nonnegative_int(start, "catalog_row_start")
+    stop = parse_optional_nonnegative_int(stop, "catalog_row_stop")
+
+    if start is None:
+        start = 0
+
+    if stop is not None and stop <= start:
+        raise ValueError(
+            "catalog_row_stop debe ser mayor que catalog_row_start. "
+            f"Recibido start={start}, stop={stop}."
+        )
+
+    return int(start), stop
 
 
 MAX_BASE_EVENTS = parse_max_events(MAX_BASE_EVENTS_CONFIG)
@@ -1826,9 +1953,32 @@ def rename_sedighe_xi_columns(data):
     return data.rename(columns=rename)
 
 
-def load_raw_catalog(columns_file, data_file, nrows=None):
+def load_raw_catalog(
+    columns_file,
+    data_file,
+    nrows=None,
+    catalog_row_start=0,
+    catalog_row_stop=None,
+):
+    catalog_row_start, catalog_row_stop = resolve_catalog_row_window(
+        catalog_row_start,
+        catalog_row_stop,
+    )
+
+    if catalog_row_stop is not None:
+        window_nrows = int(catalog_row_stop - catalog_row_start)
+        if nrows is None:
+            nrows = window_nrows
+        else:
+            nrows = min(int(nrows), window_nrows)
+
     log_step(f"[catalog] columns_file = {columns_file}")
     log_step(f"[catalog] data_file    = {data_file}")
+    log_step(
+        "[catalog] row window   = "
+        f"[{catalog_row_start}, "
+        f"{catalog_row_stop if catalog_row_stop is not None else 'EOF'})"
+    )
     if nrows is not None:
         log_step(f"[catalog] read_nrows   = {nrows}")
     else:
@@ -1881,6 +2031,7 @@ def load_raw_catalog(columns_file, data_file, nrows=None):
         header=None,
         names=column_names,
         engine="c",
+        skiprows=catalog_row_start if catalog_row_start > 0 else None,
         nrows=nrows,
     )
 
@@ -1937,12 +2088,17 @@ def _resolve_angle_unit(values):
     return "degrees"
 
 
-def prepare_catalog(raw_catalog, max_base_events):
+def prepare_catalog(raw_catalog, max_base_events, catalog_row_offset=0):
     data = raw_catalog.copy().reset_index(drop=True)
 
-    data["catalog_row"] = np.arange(
-        len(data),
-        dtype=int,
+    catalog_row_offset = int(catalog_row_offset)
+
+    data["catalog_row"] = (
+        catalog_row_offset
+        + np.arange(
+            len(data),
+            dtype=int,
+        )
     )
 
     numeric_columns = list(
@@ -2534,7 +2690,10 @@ def build_tasks(prepared_catalog):
         )
 
         task = {
-            "global_i": int(prepared_index),
+            # Use the absolute catalog row as global_i so merged chunks have
+            # unique event identifiers. prepared_index remains the local row
+            # inside this chunk's prepared catalog.
+            "global_i": int(row["catalog_row"]),
             "simulation_seed": simulation_seed,
             "prepared_index": int(prepared_index),
             "catalog_row": int(row["catalog_row"]),
@@ -3135,6 +3294,319 @@ def add_metadata_to_result_parquets(
             )
 
 
+def _get_attr_or_key(obj, key, default=None):
+    """
+    Access key/attribute from dict-like objects or normal Python objects.
+    """
+
+    if obj is None:
+        return default
+
+    if isinstance(obj, dict):
+        return obj.get(key, default)
+
+    try:
+        return obj[key]
+    except Exception:
+        pass
+
+    return getattr(obj, key, default)
+
+
+def _extract_fit_results_object(result):
+    """
+    Return the pyLIMA fit_results object/dict from the sim_fit output.
+
+    In the current pipeline the most common structure is
+        result["fit_rr"].fit_results
+    but this function also accepts a few direct aliases for compatibility.
+    """
+
+    if not isinstance(result, dict):
+        return None
+
+    for key in [
+        "fit_results",
+        "fitter_results",
+        "fit_result",
+        "pyLIMAfit_results",
+        "fit_output",
+    ]:
+        value = result.get(key, None)
+        if value is not None:
+            return value
+
+    for key in ["fit_rr", "fit_roman", "fitter", "fit"]:
+        value = result.get(key, None)
+        fit_results = _get_attr_or_key(value, "fit_results", None)
+        if fit_results is not None:
+            return fit_results
+
+    return None
+
+
+def _extract_fit_model_object(result):
+    """
+    Return the fitted pyLIMA model object, if available.
+    """
+
+    if not isinstance(result, dict):
+        return None
+
+    for key in [
+        "pyLIMAmodel_rr",
+        "pyLIMAmodel_fit",
+        "fit_model",
+        "pyLIMAmodel",
+    ]:
+        value = result.get(key, None)
+        if value is not None:
+            return value
+
+    return None
+
+
+def _parameter_names_from_model_dictionnary(model_obj):
+    """
+    Infer parameter names in vector/covariance order from pyLIMA's
+    model_dictionnary.
+    """
+
+    if model_obj is None:
+        return None
+
+    model_dict = getattr(model_obj, "model_dictionnary", None)
+
+    if model_dict is None:
+        return None
+
+    if not isinstance(model_dict, dict):
+        return None
+
+    pairs = []
+
+    for name, value in model_dict.items():
+        index = None
+
+        if isinstance(value, (int, np.integer)):
+            index = int(value)
+        elif isinstance(value, (list, tuple, np.ndarray)) and len(value) > 0:
+            try:
+                index = int(value[0])
+            except Exception:
+                index = None
+        else:
+            try:
+                index = int(value)
+            except Exception:
+                index = None
+
+        if index is not None:
+            pairs.append((index, str(name)))
+
+    if len(pairs) == 0:
+        return None
+
+    pairs = sorted(pairs, key=lambda item: item[0])
+    return [name for _, name in pairs]
+
+
+def _parameter_names_from_fit_results(fit_results):
+    """
+    Try to infer fitted-parameter names directly from fit_results.
+    """
+
+    if fit_results is None:
+        return None
+
+    for key in [
+        "fit_parameters",
+        "model_parameters",
+        "parameters",
+        "fit_parameter_names",
+        "parameter_names",
+    ]:
+        value = _get_attr_or_key(fit_results, key, None)
+
+        if value is None:
+            continue
+
+        if isinstance(value, dict):
+            return [str(name) for name in value.keys()]
+
+        if isinstance(value, (list, tuple, np.ndarray)):
+            return [str(name) for name in value]
+
+    return None
+
+
+def _extract_fit_parameter_names(result, fit_results):
+    """
+    Determine the parameter order used by best_model and covariance_matrix.
+
+    Preferred source is pyLIMA_model.model_dictionnary.  If unavailable,
+    fall back to fit_results metadata.  If both are unavailable, use the
+    known nonlinear order for an FSPL fit without parallax.
+    """
+
+    model_obj = _extract_fit_model_object(result)
+    names = _parameter_names_from_model_dictionnary(model_obj)
+
+    if names is not None:
+        return names, "pyLIMAmodel_rr.model_dictionnary"
+
+    names = _parameter_names_from_fit_results(fit_results)
+
+    if names is not None:
+        return names, "fit_results"
+
+    return ["t0", "u0", "tE", "rho"], "fallback_FSPL_no_parallax"
+
+
+def _extract_best_model_vector(fit_results):
+    """
+    Return fit_results['best_model'] as a float vector, if available.
+    """
+
+    best_model = _get_attr_or_key(fit_results, "best_model", None)
+
+    if best_model is None:
+        return None
+
+    try:
+        return np.asarray(best_model, dtype=float)
+    except Exception:
+        return None
+
+
+def _extract_covariance_matrix(fit_results):
+    """
+    Return fit_results['covariance_matrix'] as a float array, if available.
+    """
+
+    covariance = _get_attr_or_key(fit_results, "covariance_matrix", None)
+
+    if covariance is None:
+        return None
+
+    try:
+        return np.asarray(covariance, dtype=float)
+    except Exception:
+        return None
+
+
+def extract_covariance_uncertainties(result, base_row=None):
+    """
+    Extract covariance-based uncertainties from pyLIMA fit_results.
+
+    For a fitted parameter p_i, the 1-sigma uncertainty is
+        sigma_i = sqrt(C_ii),
+    where C is fit_results['covariance_matrix'].
+
+    The main quantity used for the finite-source analysis is
+        sigma_rho / rho_fit.
+    The true-denominator version sigma_rho / rho_true is also stored for
+    diagnostic purposes.
+    """
+
+    out = {
+        "fit_results_available": False,
+        "covariance_matrix_available": False,
+        "covariance_matrix_shape": "",
+        "covariance_parameter_order_source": "",
+        "covariance_parameter_names": "",
+        "rho_fit_from_best_model": np.nan,
+        "rho_err_cov": np.nan,
+        "sigma_rho_over_rho_fit": np.nan,
+        "sigma_rho_over_rho_true": np.nan,
+        "rho_covariance_index": np.nan,
+        "rho_covariance_variance": np.nan,
+        "t0_fit_from_best_model": np.nan,
+        "u0_fit_from_best_model": np.nan,
+        "tE_fit_from_best_model": np.nan,
+        "t0_err_cov": np.nan,
+        "u0_err_cov": np.nan,
+        "tE_err_cov": np.nan,
+    }
+
+    fit_results = _extract_fit_results_object(result)
+
+    if fit_results is None:
+        return out
+
+    out["fit_results_available"] = True
+
+    covariance = _extract_covariance_matrix(fit_results)
+
+    if covariance is None:
+        return out
+
+    out["covariance_matrix_available"] = True
+    out["covariance_matrix_shape"] = str(tuple(covariance.shape))
+
+    if covariance.ndim != 2 or covariance.shape[0] != covariance.shape[1]:
+        return out
+
+    names, names_source = _extract_fit_parameter_names(
+        result,
+        fit_results,
+    )
+
+    names = [str(name) for name in names]
+
+    out["covariance_parameter_order_source"] = str(names_source)
+    out["covariance_parameter_names"] = ",".join(names)
+
+    best_model = _extract_best_model_vector(fit_results)
+
+    def _index_of(parameter_name):
+        if parameter_name in names:
+            return names.index(parameter_name)
+        return None
+
+    for parameter_name in ["t0", "u0", "tE", "rho"]:
+        index = _index_of(parameter_name)
+
+        if index is None:
+            continue
+
+        if index < 0 or index >= covariance.shape[0]:
+            continue
+
+        variance = float(covariance[index, index])
+
+        if not np.isfinite(variance) or variance < 0.0:
+            continue
+
+        sigma = float(np.sqrt(variance))
+        out[f"{parameter_name}_err_cov"] = sigma
+
+        if best_model is not None and index < len(best_model):
+            value = float(best_model[index])
+            out[f"{parameter_name}_fit_from_best_model"] = value
+
+        if parameter_name == "rho":
+            out["rho_covariance_index"] = int(index)
+            out["rho_covariance_variance"] = variance
+            out["rho_err_cov"] = sigma
+
+            rho_fit = out["rho_fit_from_best_model"]
+
+            if np.isfinite(rho_fit) and rho_fit > 0.0:
+                out["sigma_rho_over_rho_fit"] = sigma / rho_fit
+
+            if base_row is not None:
+                try:
+                    rho_true = float(base_row.get("rho", np.nan))
+                except Exception:
+                    rho_true = np.nan
+
+                if np.isfinite(rho_true) and rho_true > 0.0:
+                    out["sigma_rho_over_rho_true"] = sigma / rho_true
+
+    return out
+
+
 # ============================================================================
 # Worker
 # ============================================================================
@@ -3460,6 +3932,16 @@ def run_single_event(task):
 
                 summary.update(t0_reference_diagnostic)
 
+                covariance_uncertainty_info = extract_covariance_uncertainties(
+                    result,
+                    base_row=base_row,
+                )
+
+                summary.update(covariance_uncertainty_info)
+
+                print("covariance uncertainty info")
+                print(json.dumps(covariance_uncertainty_info, indent=2, default=str))
+
                 if isinstance(result, dict):
                     sim_status = str(result.get("status", ""))
                     summary["sim_fit_status"] = sim_status
@@ -3485,6 +3967,7 @@ def run_single_event(task):
 
                 metadata_with_fit = {
                     **metadata,
+                    **covariance_uncertainty_info,
                     "fit_n_points_total": summary["fit_n_points_total"],
                     **{
                         f"fit_n_points_{band}": summary[
@@ -3619,6 +4102,8 @@ def print_diagnostics(
         )
     else:
         print("Fit-only window:      disabled")
+    print(f"Run name base:          {RUN_NAME_BASE}")
+    print(f"Chunk output label:     {CHUNK_OUTPUT_LABEL if CHUNK_OUTPUT_LABEL else '(none)'}")
     print(f"Run directory:          {RUN_DIR}")
     print(f"Band availability:      {BAND_AVAILABILITY_MODE}")
     print(f"Blending:               {BLENDING_ASSUMPTION}")
@@ -3699,6 +4184,44 @@ def build_parser():
     )
 
     parser.add_argument(
+        "--catalog-row-start",
+        type=int,
+        default=None,
+        help=(
+            "First raw LSSTMONTS row to read, zero-indexed and inclusive. "
+            "Use this for SLURM/job-array chunks."
+        ),
+    )
+
+    parser.add_argument(
+        "--catalog-row-stop",
+        type=int,
+        default=None,
+        help=(
+            "Last raw LSSTMONTS row to read, zero-indexed and exclusive. "
+            "Use this for SLURM/job-array chunks."
+        ),
+    )
+
+    parser.add_argument(
+        "--chunk-id",
+        default=None,
+        help=(
+            "Optional chunk identifier used only for output naming and "
+            "metadata. With --chunk-id N, outputs go under chunk_NNNNNN."
+        ),
+    )
+
+    parser.add_argument(
+        "--run-name-suffix",
+        default=None,
+        help=(
+            "Optional output subdirectory label under the config run_name. "
+            "This is useful for manual chunking without changing the config."
+        ),
+    )
+
+    parser.add_argument(
         "--prepare-only",
         action="store_true",
         help=(
@@ -3739,6 +4262,21 @@ def main():
         if args.read_nrows is None
         else args.read_nrows,
         name="catalog.read_nrows",
+    )
+
+    catalog_row_start, catalog_row_stop = resolve_catalog_row_window(
+        first_config_value(
+            args.catalog_row_start,
+            cfg("input", "catalog_row_start", None),
+            cfg("catalog", "row_start", None),
+            default=0,
+        ),
+        first_config_value(
+            args.catalog_row_stop,
+            cfg("input", "catalog_row_stop", None),
+            cfg("catalog", "row_stop", None),
+            default=None,
+        ),
     )
 
     if workers <= 0:
@@ -3788,6 +4326,8 @@ def main():
         COLUMNS_FILE,
         DATA_FILE,
         nrows=read_nrows,
+        catalog_row_start=catalog_row_start,
+        catalog_row_stop=catalog_row_stop,
     )
 
     log_step("[main] Preparing catalog ...")
@@ -3795,6 +4335,7 @@ def main():
         prepare_catalog(
             raw_catalog,
             max_base_events=max_base_events,
+            catalog_row_offset=catalog_row_start,
         )
     )
     log_step(
@@ -3854,6 +4395,8 @@ def main():
     run_config = {
         "CONFIG_PATH": str(CONFIG_PATH),
         "BASE_DIR": str(BASE_DIR),
+        "RUN_NAME_BASE": str(RUN_NAME_BASE),
+        "CHUNK_OUTPUT_LABEL": str(CHUNK_OUTPUT_LABEL),
         "RUN_DIR": str(RUN_DIR),
         "COLUMNS_FILE": str(COLUMNS_FILE),
         "DATA_FILE": str(DATA_FILE),
@@ -3887,6 +4430,8 @@ def main():
         "T0_ZERO_JD_LEGACY_DIAGNOSTIC_ONLY": T0_ZERO_JD,
         "MAX_BASE_EVENTS": max_base_events,
         "READ_NROWS": read_nrows,
+        "CATALOG_ROW_START": catalog_row_start,
+        "CATALOG_ROW_STOP": catalog_row_stop,
         "N_BASE_EVENTS_SELECTED":
             len(prepared_catalog),
         "N_TASKS": len(tasks),
@@ -3997,6 +4542,9 @@ def main():
         "fit_window_half_width_tE": FIT_WINDOW_HALF_WIDTH_TE,
         "fit_window_minimum_total_points":
             FIT_WINDOW_MINIMUM_TOTAL_POINTS,
+        "catalog_row_start": catalog_row_start,
+        "catalog_row_stop": catalog_row_stop,
+        "chunk_output_label": CHUNK_OUTPUT_LABEL,
     }
 
     try:
