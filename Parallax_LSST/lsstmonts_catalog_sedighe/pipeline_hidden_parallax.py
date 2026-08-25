@@ -44,6 +44,16 @@ class SedighePipelineConfig:
     roman_rubin_dir: Path
     out_dir: Path
 
+    # Roots resueltos desde configuration file
+    microlensing_root: Optional[Path] = None
+    ulensing_degenerate_models_root: Optional[Path] = None
+    output_root: Optional[Path] = None
+
+    # Paths Rubin resueltos desde configuration file
+    rubin_sim_data_dir: Optional[Path] = None
+    rubin_throughputs_dir: Optional[Path] = None
+    rubin_opsim_db_path: Optional[Path] = None
+
     # Dataset
     max_base_events: Optional[int] = None
     global_indices: Optional[list[int]] = None
@@ -104,19 +114,33 @@ class SedighePipelineConfig:
     @classmethod
     def from_config_file(
         cls,
-        runner_path,
         config_path,
-        roman_rubin_dir,
-        out_dir,
+        runner_path=None,
+        roman_rubin_dir=None,
+        out_dir=None,
         **overrides,
     ):
         """
-        Construye SedighePipelineConfig leyendo las opciones científicas
-        del JSON/YAML principal usado por el runner.
+        Construye SedighePipelineConfig leyendo el JSON/YAML principal usado
+        por el runner.
 
-        Las claves en overrides pisan al archivo de configuración.
+        La versión corregida resuelve también la sección paths:
+
+            paths.microlensing_root
+            paths.ulensing_degenerate_models_root
+            paths.output_root
+
+        y la sección rubin:
+
+            rubin.sim_data_dir
+            rubin.opsim_db_path
+            rubin.throughputs_dir
+
+        De esta forma la PC y el cluster se controlan cambiando solo el
+        configuration file, sin reconstruir paths a partir de HOME.
         """
 
+        config_path = Path(config_path).expanduser().resolve()
         raw_config = _load_pipeline_config_file(config_path)
 
         fit_cfg = _section(raw_config, "fit")
@@ -126,15 +150,38 @@ class SedighePipelineConfig:
         hidden_cfg = _section(raw_config, "hidden_parallax")
         output_cfg = _section(raw_config, "output")
         selection_cfg = _section(raw_config, "selection")
-        input_cfg = _section(raw_config, "input")
+
+        path_info = _resolve_pipeline_paths_from_config(
+            raw_config=raw_config,
+            config_path=config_path,
+            runner_path=runner_path,
+            roman_rubin_dir=roman_rubin_dir,
+            out_dir=out_dir,
+        )
+
+        rubin_info = _resolve_rubin_paths_from_config(
+            raw_config=raw_config,
+            config_path=config_path,
+            path_info=path_info,
+        )
 
         fit_time_window = _fit_time_window_from_config(fit_cfg)
 
         kwargs = dict(
-            runner_path=Path(runner_path),
+            runner_path=Path(path_info["runner_path"]),
             config_path=Path(config_path),
-            roman_rubin_dir=Path(roman_rubin_dir),
-            out_dir=Path(out_dir),
+            roman_rubin_dir=Path(path_info["roman_rubin_dir"]),
+            out_dir=Path(path_info["out_dir"]),
+
+            microlensing_root=Path(path_info["microlensing_root"]),
+            ulensing_degenerate_models_root=Path(
+                path_info["ulensing_degenerate_models_root"]
+            ),
+            output_root=Path(path_info["output_root"]),
+
+            rubin_sim_data_dir=Path(rubin_info["rubin_sim_data_dir"]),
+            rubin_throughputs_dir=Path(rubin_info["rubin_throughputs_dir"]),
+            rubin_opsim_db_path=Path(rubin_info["rubin_opsim_db_path"]),
 
             max_base_events=_parse_all_or_int(
                 _first_non_none(
@@ -240,10 +287,7 @@ class SedighePipelineConfig:
             ),
         )
 
-        # No usamos input.read_nrows directamente en esta clase porque el
-        # runner ya lo lee desde el mismo config. load_catalog_and_tasks()
-        # usa runner.READ_NROWS_CONFIG para respetarlo.
-
+        # Los overrides siguen ganando sobre el configuration file.
         kwargs.update(overrides)
 
         return cls(**kwargs)
@@ -351,6 +395,324 @@ def _parse_all_or_int(value):
         return int(stripped)
 
     return int(value)
+
+
+def _expand_config_vars(value, variables=None):
+    """
+    Expande ~, variables de entorno y placeholders ${VAR} usando variables
+    explícitas además de os.environ.
+    """
+
+    if value is None:
+        return None
+
+    if variables is None:
+        variables = {}
+
+    text = os.path.expanduser(str(value))
+
+    env = dict(os.environ)
+    env["HOME"] = str(Path.home())
+
+    for key, val in variables.items():
+        if val not in (None, ""):
+            env[str(key)] = str(val)
+
+    for key, val in env.items():
+        text = text.replace("${" + str(key) + "}", str(val))
+
+    return os.path.expandvars(text)
+
+
+def _resolve_config_path(value, variables=None, base_dir=None):
+    """
+    Resuelve paths del configuration file.
+
+    Los paths relativos se interpretan relativos al directorio del config.
+    """
+
+    if value is None:
+        return None
+
+    text = _expand_config_vars(
+        value,
+        variables=variables,
+    )
+
+    path = Path(text)
+
+    if not path.is_absolute():
+        if base_dir is None:
+            base_dir = Path.cwd()
+        path = Path(base_dir) / path
+
+    return path.resolve()
+
+
+def _resolve_pipeline_paths_from_config(
+    raw_config,
+    config_path,
+    runner_path=None,
+    roman_rubin_dir=None,
+    out_dir=None,
+):
+    """
+    Resuelve paths machine-dependent del pipeline desde raw_config["paths"].
+    """
+
+    config_path = Path(config_path).expanduser().resolve()
+    config_dir = config_path.parent
+
+    paths_cfg = _section(raw_config, "paths")
+    hidden_cfg = _section(raw_config, "hidden_parallax")
+    output_cfg = _section(raw_config, "output")
+
+    base_vars = {
+        "HOME": Path.home(),
+    }
+
+    microlensing_root = _resolve_config_path(
+        _first_non_none(
+            paths_cfg.get("microlensing_root", None),
+            os.environ.get("MICROLENSING_ROOT", ""),
+            default="${HOME}/microlensing",
+        ),
+        variables=base_vars,
+        base_dir=config_dir,
+    )
+
+    vars_after_microlensing = {
+        **base_vars,
+        "MICROLENSING_ROOT": microlensing_root,
+    }
+
+    ulensing_root = _resolve_config_path(
+        _first_non_none(
+            paths_cfg.get("ulensing_degenerate_models_root", None),
+            paths_cfg.get("ulensing_root", None),
+            os.environ.get("ULENSING_DEGENERATE_MODELS_ROOT", ""),
+            default="${HOME}/ulensing_degenerate_models",
+        ),
+        variables=vars_after_microlensing,
+        base_dir=config_dir,
+    )
+
+    vars_after_ulensing = {
+        **vars_after_microlensing,
+        "ULENSING_DEGENERATE_MODELS_ROOT": ulensing_root,
+    }
+
+    parallax_lsst_root = _resolve_config_path(
+        _first_non_none(
+            paths_cfg.get("parallax_lsst_root", None),
+            paths_cfg.get("project_base", None),
+            os.environ.get("PARALLAX_LSST_BASE", ""),
+            default=str(ulensing_root / "Parallax_LSST"),
+        ),
+        variables=vars_after_ulensing,
+        base_dir=config_dir,
+    )
+
+    vars_after_parallax = {
+        **vars_after_ulensing,
+        "PARALLAX_LSST_BASE": parallax_lsst_root,
+    }
+
+    if runner_path is None:
+        runner_path_value = _first_non_none(
+            paths_cfg.get("runner_path", None),
+            hidden_cfg.get("runner_path", None),
+            default=str(
+                parallax_lsst_root
+                / "lsstmonts_catalog_sedighe"
+                / "run_lsstmonts_catalog_hidden_parallax.py"
+            ),
+        )
+    else:
+        runner_path_value = runner_path
+
+    runner_path = _resolve_config_path(
+        runner_path_value,
+        variables=vars_after_parallax,
+        base_dir=config_dir,
+    )
+
+    if roman_rubin_dir is None:
+        roman_rubin_value = _first_non_none(
+            paths_cfg.get("roman_rubin_dir", None),
+            os.environ.get("ROMAN_RUBIN_DIR", ""),
+            default=str(
+                microlensing_root
+                / "simulation_Rubin"
+                / "roman_rubin"
+            ),
+        )
+    else:
+        roman_rubin_value = roman_rubin_dir
+
+    roman_rubin_dir = _resolve_config_path(
+        roman_rubin_value,
+        variables=vars_after_parallax,
+        base_dir=config_dir,
+    )
+
+    vars_after_roman = {
+        **vars_after_parallax,
+        "ROMAN_RUBIN_DIR": roman_rubin_dir,
+    }
+
+    output_root = _resolve_config_path(
+        _first_non_none(
+            paths_cfg.get("output_root", None),
+            os.environ.get("OUTPUT_ROOT", ""),
+            default="${HOME}/hidden_parallax",
+        ),
+        variables=vars_after_roman,
+        base_dir=config_dir,
+    )
+
+    vars_after_output = {
+        **vars_after_roman,
+        "OUTPUT_ROOT": output_root,
+    }
+
+    run_name = str(
+        _first_non_none(
+            raw_config.get("run_name", None),
+            output_cfg.get("run_name", None),
+            default="hidden_parallax_run",
+        )
+    )
+
+    if out_dir is None:
+        out_dir_value = _first_non_none(
+            hidden_cfg.get("out_dir", None),
+            output_cfg.get("pipeline_dir", None),
+            paths_cfg.get("pipeline_output_dir", None),
+            default=str(output_root / run_name),
+        )
+    else:
+        out_dir_value = out_dir
+
+    out_dir = _resolve_config_path(
+        out_dir_value,
+        variables=vars_after_output,
+        base_dir=config_dir,
+    )
+
+    for key, val in {
+        "MICROLENSING_ROOT": microlensing_root,
+        "ULENSING_DEGENERATE_MODELS_ROOT": ulensing_root,
+        "PARALLAX_LSST_BASE": parallax_lsst_root,
+        "ROMAN_RUBIN_DIR": roman_rubin_dir,
+        "OUTPUT_ROOT": output_root,
+    }.items():
+        os.environ[key] = str(val)
+
+    return {
+        "microlensing_root": microlensing_root,
+        "ulensing_degenerate_models_root": ulensing_root,
+        "parallax_lsst_root": parallax_lsst_root,
+        "runner_path": runner_path,
+        "roman_rubin_dir": roman_rubin_dir,
+        "output_root": output_root,
+        "out_dir": out_dir,
+    }
+
+
+def _resolve_rubin_paths_from_config(raw_config, config_path, path_info=None):
+    """
+    Resuelve rubin.sim_data_dir / opsim_db_path / throughputs_dir desde config.
+    """
+
+    config_path = Path(config_path).expanduser().resolve()
+    config_dir = config_path.parent
+
+    rubin_cfg = _section(raw_config, "rubin")
+    paths_cfg = _section(raw_config, "paths")
+
+    variables = {
+        "HOME": Path.home(),
+    }
+
+    if path_info is not None:
+        variables.update({
+            "MICROLENSING_ROOT": path_info.get("microlensing_root"),
+            "ULENSING_DEGENERATE_MODELS_ROOT": path_info.get(
+                "ulensing_degenerate_models_root"
+            ),
+            "PARALLAX_LSST_BASE": path_info.get("parallax_lsst_root"),
+            "ROMAN_RUBIN_DIR": path_info.get("roman_rubin_dir"),
+            "OUTPUT_ROOT": path_info.get("output_root"),
+        })
+
+    sim_data_value = _first_non_none(
+        rubin_cfg.get("sim_data_dir", None),
+        paths_cfg.get("rubin_sim_data_dir", None),
+        os.environ.get("RUBIN_SIM_DATA_DIR", ""),
+        os.environ.get("SIMS_DATA_DIR", ""),
+        default="${HOME}/rubin_sim_data",
+    )
+
+    rubin_sim_data_dir = _resolve_config_path(
+        sim_data_value,
+        variables=variables,
+        base_dir=config_dir,
+    )
+
+    variables.update({
+        "RUBIN_SIM_DATA_DIR": rubin_sim_data_dir,
+        "SIMS_DATA_DIR": rubin_sim_data_dir,
+    })
+
+    throughputs_value = _first_non_none(
+        rubin_cfg.get("throughputs_dir", None),
+        paths_cfg.get("rubin_throughputs_dir", None),
+        os.environ.get("RUBIN_THROUGHPUTS_DIR", ""),
+        default=str(rubin_sim_data_dir / "throughputs" / "baseline"),
+    )
+
+    rubin_throughputs_dir = _resolve_config_path(
+        throughputs_value,
+        variables=variables,
+        base_dir=config_dir,
+    )
+
+    variables["RUBIN_THROUGHPUTS_DIR"] = rubin_throughputs_dir
+
+    opsim_value = _first_non_none(
+        rubin_cfg.get("opsim_db_path", None),
+        _section(raw_config, "simulation").get("opsim_db_path", None),
+        paths_cfg.get("opsim_db_path", None),
+        os.environ.get("RUBIN_OPSIM_DB_PATH", ""),
+        os.environ.get("RUBIN_OPSIM_DB", ""),
+        default=None,
+    )
+
+    if opsim_value is None:
+        rubin_opsim_db_path = None
+    else:
+        rubin_opsim_db_path = _resolve_config_path(
+            opsim_value,
+            variables=variables,
+            base_dir=config_dir,
+        )
+
+    for key, val in {
+        "RUBIN_SIM_DATA_DIR": rubin_sim_data_dir,
+        "SIMS_DATA_DIR": rubin_sim_data_dir,
+        "RUBIN_THROUGHPUTS_DIR": rubin_throughputs_dir,
+        "RUBIN_OPSIM_DB_PATH": rubin_opsim_db_path,
+        "RUBIN_OPSIM_DB": rubin_opsim_db_path,
+    }.items():
+        if val is not None:
+            os.environ[key] = str(val)
+
+    return {
+        "rubin_sim_data_dir": rubin_sim_data_dir,
+        "rubin_throughputs_dir": rubin_throughputs_dir,
+        "rubin_opsim_db_path": rubin_opsim_db_path,
+    }
 
 
 def _fit_time_window_from_config(fit_cfg):
@@ -651,7 +1013,26 @@ def import_runner(config: SedighePipelineConfig):
     """
     Importa el runner asegurando que fit_lc y functions_roman_rubin
     se lean nuevamente desde disco.
+
+    También exporta los paths resueltos desde el configuration file para que
+    el runner y set_telescopes_pyLIMA no reconstruyan nada a partir de HOME.
     """
+
+    path_exports = {
+        "ROMAN_RUBIN_DIR": config.roman_rubin_dir,
+        "MICROLENSING_ROOT": config.microlensing_root,
+        "ULENSING_DEGENERATE_MODELS_ROOT": config.ulensing_degenerate_models_root,
+        "OUTPUT_ROOT": config.output_root,
+        "RUBIN_SIM_DATA_DIR": config.rubin_sim_data_dir,
+        "SIMS_DATA_DIR": config.rubin_sim_data_dir,
+        "RUBIN_THROUGHPUTS_DIR": config.rubin_throughputs_dir,
+        "RUBIN_OPSIM_DB_PATH": config.rubin_opsim_db_path,
+        "RUBIN_OPSIM_DB": config.rubin_opsim_db_path,
+    }
+
+    for key, value in path_exports.items():
+        if value is not None:
+            os.environ[key] = str(value)
 
     if str(config.roman_rubin_dir) not in sys.path:
         sys.path.insert(0, str(config.roman_rubin_dir))
@@ -660,26 +1041,34 @@ def import_runner(config: SedighePipelineConfig):
         "runner_sedighe_unified",
         "fit_lc",
         "functions_roman_rubin",
+        "set_telescopes_pyLIMA",
+        "set_model_pyLIMA",
     ]:
         if module_name in sys.modules:
             del sys.modules[module_name]
 
-    sys.argv = [
-        str(config.runner_path),
-        "--config",
-        str(config.config_path),
-    ]
+    old_argv = sys.argv[:]
 
-    module_name = "runner_sedighe_unified"
+    try:
+        sys.argv = [
+            str(config.runner_path),
+            "--config",
+            str(config.config_path),
+        ]
 
-    spec = importlib.util.spec_from_file_location(
-        module_name,
-        config.runner_path,
-    )
+        module_name = "runner_sedighe_unified"
 
-    runner = importlib.util.module_from_spec(spec)
-    sys.modules[module_name] = runner
-    spec.loader.exec_module(runner)
+        spec = importlib.util.spec_from_file_location(
+            module_name,
+            config.runner_path,
+        )
+
+        runner = importlib.util.module_from_spec(spec)
+        sys.modules[module_name] = runner
+        spec.loader.exec_module(runner)
+
+    finally:
+        sys.argv = old_argv
 
     return runner
 
@@ -803,6 +1192,21 @@ def notebook_like_config_from_runner(runner, config: SedighePipelineConfig):
             runner.RUBIN_CACHE_CELL_DEG
             if config.rubin_cache_cell_deg is None
             else config.rubin_cache_cell_deg
+        ),
+        "opsim_db_path": (
+            str(config.rubin_opsim_db_path)
+            if config.rubin_opsim_db_path is not None
+            else str(getattr(runner, "RUBIN_OPSIM_DB_PATH", ""))
+        ),
+        "rubin_sim_data_dir": (
+            str(config.rubin_sim_data_dir)
+            if config.rubin_sim_data_dir is not None
+            else str(getattr(runner, "RUBIN_SIM_DATA_DIR", ""))
+        ),
+        "rubin_throughputs_dir": (
+            str(config.rubin_throughputs_dir)
+            if config.rubin_throughputs_dir is not None
+            else str(getattr(runner, "RUBIN_THROUGHPUTS_DIR", ""))
         ),
     }
 
@@ -963,6 +1367,16 @@ def build_sim_fit_kwargs(
             "runner.sim_fit no acepta apply_photometric_filter. "
             "Hay que actualizar functions_roman_rubin/sim_fit."
         )
+
+    # Pasar paths Rubin solo si la versión de sim_fit los acepta.
+    if "opsim_db_path" in sig and config.rubin_opsim_db_path is not None:
+        kwargs["opsim_db_path"] = str(config.rubin_opsim_db_path)
+
+    if "rubin_sim_data_dir" in sig and config.rubin_sim_data_dir is not None:
+        kwargs["rubin_sim_data_dir"] = str(config.rubin_sim_data_dir)
+
+    if "rubin_throughputs_dir" in sig and config.rubin_throughputs_dir is not None:
+        kwargs["rubin_throughputs_dir"] = str(config.rubin_throughputs_dir)
 
     return kwargs
 

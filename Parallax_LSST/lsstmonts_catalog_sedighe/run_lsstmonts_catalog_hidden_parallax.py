@@ -537,10 +537,193 @@ def resolve_config_path(value, default=None, extra_env=None):
     return path.resolve()
 
 
+def _paths_section():
+    value = CONFIG.get("paths", {})
+
+    if value is None:
+        return {}
+
+    if not isinstance(value, dict):
+        raise TypeError(
+            "La sección 'paths' del config debe ser un diccionario."
+        )
+
+    return value
+
+
+def configure_paths_from_config():
+    """
+    Resuelve y exporta los paths machine-dependent del proyecto.
+
+    Esquema recomendado en el JSON/YAML:
+
+        paths:
+          microlensing_root: /home/anibalvarela/microlensing
+          ulensing_degenerate_models_root: /export/.../ulensing_degenerate_models
+          output_root: /export/.../hidden_parallax
+
+    A partir de esos roots se derivan:
+        PARALLAX_LSST_BASE = ${ULENSING_DEGENERATE_MODELS_ROOT}/Parallax_LSST
+        ROMAN_RUBIN_DIR   = ${MICROLENSING_ROOT}/simulation_Rubin/roman_rubin
+
+    Estos valores se exportan a os.environ antes de resolver otros paths,
+    para que el resto del config pueda usar placeholders como:
+        ${ULENSING_DEGENERATE_MODELS_ROOT}/Parallax_LSST/data_sedighe/columns
+        ${OUTPUT_ROOT}/runs
+    """
+
+    paths_cfg = _paths_section()
+
+    base_env = {
+        "HOME": HOME,
+    }
+
+    microlensing_value = first_config_value(
+        paths_cfg.get("microlensing_root", None),
+        os.environ.get("MICROLENSING_ROOT", ""),
+        default="${HOME}/microlensing",
+    )
+
+    microlensing_root = resolve_config_path(
+        microlensing_value,
+        extra_env=base_env,
+    )
+
+    env_after_microlensing = {
+        **base_env,
+        "MICROLENSING_ROOT": microlensing_root,
+    }
+
+    ulensing_value = first_config_value(
+        paths_cfg.get("ulensing_degenerate_models_root", None),
+        paths_cfg.get("ulensing_root", None),
+        os.environ.get("ULENSING_DEGENERATE_MODELS_ROOT", ""),
+        default="${HOME}/ulensing_degenerate_models",
+    )
+
+    ulensing_degenerate_models_root = resolve_config_path(
+        ulensing_value,
+        extra_env=env_after_microlensing,
+    )
+
+    env_after_ulensing = {
+        **env_after_microlensing,
+        "ULENSING_DEGENERATE_MODELS_ROOT": ulensing_degenerate_models_root,
+    }
+
+    parallax_lsst_value = first_config_value(
+        paths_cfg.get("parallax_lsst_root", None),
+        paths_cfg.get("project_base", None),
+        os.environ.get("PARALLAX_LSST_BASE", ""),
+        default=None,
+    )
+
+    if parallax_lsst_value in (None, "", "default", "auto"):
+        parallax_lsst_base = (
+            ulensing_degenerate_models_root
+            / "Parallax_LSST"
+        ).resolve()
+    else:
+        parallax_lsst_base = resolve_config_path(
+            parallax_lsst_value,
+            extra_env=env_after_ulensing,
+        )
+
+    env_after_parallax = {
+        **env_after_ulensing,
+        "PARALLAX_LSST_BASE": parallax_lsst_base,
+    }
+
+    roman_rubin_value = first_config_value(
+        paths_cfg.get("roman_rubin_dir", None),
+        os.environ.get("ROMAN_RUBIN_DIR", ""),
+        default=None,
+    )
+
+    if roman_rubin_value in (None, "", "default", "auto"):
+        roman_rubin_dir = (
+            microlensing_root
+            / "simulation_Rubin"
+            / "roman_rubin"
+        ).resolve()
+    else:
+        roman_rubin_dir = resolve_config_path(
+            roman_rubin_value,
+            extra_env=env_after_parallax,
+        )
+
+    env_after_roman = {
+        **env_after_parallax,
+        "ROMAN_RUBIN_DIR": roman_rubin_dir,
+    }
+
+    output_root_value = first_config_value(
+        paths_cfg.get("output_root", None),
+        os.environ.get("OUTPUT_ROOT", ""),
+        default="${HOME}/hidden_parallax",
+    )
+
+    output_root = resolve_config_path(
+        output_root_value,
+        extra_env=env_after_roman,
+    )
+
+    final_env = {
+        **env_after_roman,
+        "OUTPUT_ROOT": output_root,
+    }
+
+    roman_ephemerides_value = first_config_value(
+        paths_cfg.get("roman_ephemerides", None),
+        os.environ.get("ROMAN_EPHEMERIDES", ""),
+        default=None,
+    )
+
+    roman_ephemerides = None
+
+    if roman_ephemerides_value not in (None, "", "default", "auto"):
+        roman_ephemerides = resolve_config_path(
+            roman_ephemerides_value,
+            extra_env=final_env,
+        )
+        final_env["ROMAN_EPHEMERIDES"] = roman_ephemerides
+
+    for key, value in final_env.items():
+        os.environ[str(key)] = str(value)
+
+    print(f"[config] MICROLENSING_ROOT              = {microlensing_root}", flush=True)
+    print(f"[config] ULENSING_DEGENERATE_MODELS_ROOT = {ulensing_degenerate_models_root}", flush=True)
+    print(f"[config] PARALLAX_LSST_BASE             = {parallax_lsst_base}", flush=True)
+    print(f"[config] ROMAN_RUBIN_DIR                = {roman_rubin_dir}", flush=True)
+    print(f"[config] OUTPUT_ROOT                    = {output_root}", flush=True)
+
+    if roman_ephemerides is not None:
+        print(f"[config] ROMAN_EPHEMERIDES             = {roman_ephemerides}", flush=True)
+
+    return {
+        "microlensing_root": microlensing_root,
+        "ulensing_degenerate_models_root": ulensing_degenerate_models_root,
+        "parallax_lsst_base": parallax_lsst_base,
+        "roman_rubin_dir": roman_rubin_dir,
+        "output_root": output_root,
+        "roman_ephemerides": roman_ephemerides,
+    }
+
+
+PATHS_FROM_CONFIG = configure_paths_from_config()
+
+MICROLENSING_ROOT = PATHS_FROM_CONFIG["microlensing_root"]
+ULENSING_DEGENERATE_MODELS_ROOT = PATHS_FROM_CONFIG[
+    "ulensing_degenerate_models_root"
+]
+OUTPUT_ROOT_FROM_CONFIG = PATHS_FROM_CONFIG["output_root"]
+
+
 def configure_environment_from_config():
     """
-    Exporta variables de entorno básicas desde el config.
+    Exporta variables de entorno adicionales desde el config.
 
+    Los roots principales se resuelven antes en configure_paths_from_config().
     Los paths de Rubin se terminan de resolver en configure_rubin_paths(),
     porque pueden depender unos de otros, por ejemplo:
         rubin.opsim_db_path = ${RUBIN_SIM_DATA_DIR}/...
@@ -548,6 +731,7 @@ def configure_environment_from_config():
 
     mapping = [
         ("paths", "project_base", "PARALLAX_LSST_BASE"),
+        ("paths", "parallax_lsst_root", "PARALLAX_LSST_BASE"),
         ("paths", "roman_rubin_dir", "ROMAN_RUBIN_DIR"),
         ("paths", "roman_ephemerides", "ROMAN_EPHEMERIDES"),
         # Alias backward-compatible: si el config viejo lo tiene en paths,
@@ -557,12 +741,24 @@ def configure_environment_from_config():
         ("rubin", "sim_data_dir", "RUBIN_SIM_DATA_DIR"),
     ]
 
+    extra_env = {
+        "HOME": HOME,
+        "MICROLENSING_ROOT": MICROLENSING_ROOT,
+        "ULENSING_DEGENERATE_MODELS_ROOT": ULENSING_DEGENERATE_MODELS_ROOT,
+        "PARALLAX_LSST_BASE": PATHS_FROM_CONFIG["parallax_lsst_base"],
+        "ROMAN_RUBIN_DIR": PATHS_FROM_CONFIG["roman_rubin_dir"],
+        "OUTPUT_ROOT": OUTPUT_ROOT_FROM_CONFIG,
+    }
+
     for section, key, env_key in mapping:
         value = cfg(section, key)
 
         if value not in (None, ""):
             os.environ[env_key] = str(
-                resolve_config_path(value)
+                resolve_config_path(
+                    value,
+                    extra_env=extra_env,
+                )
             )
 
             if env_key == "RUBIN_SIM_DATA_DIR":
@@ -889,6 +1085,15 @@ sim_fit = frr.sim_fit
 DEFAULT_COLUMNS_FILE = BASE_DIR / "data_sedighe" / "columns"
 DEFAULT_DATA_FILE = BASE_DIR / "data_sedighe" / "LSSTMONTS.dat"
 
+_PROJECT_PATH_ENV = {
+    "HOME": HOME,
+    "MICROLENSING_ROOT": MICROLENSING_ROOT,
+    "ULENSING_DEGENERATE_MODELS_ROOT": ULENSING_DEGENERATE_MODELS_ROOT,
+    "PARALLAX_LSST_BASE": BASE_DIR,
+    "ROMAN_RUBIN_DIR": ROMAN_RUBIN_DIR,
+    "OUTPUT_ROOT": OUTPUT_ROOT_FROM_CONFIG,
+}
+
 COLUMNS_FILE = resolve_config_path(
     first_config_value(
         cfg("input", "columns_file", None),
@@ -896,6 +1101,7 @@ COLUMNS_FILE = resolve_config_path(
         default=None,
     ),
     default=DEFAULT_COLUMNS_FILE,
+    extra_env=_PROJECT_PATH_ENV,
 )
 
 DATA_FILE = resolve_config_path(
@@ -905,6 +1111,7 @@ DATA_FILE = resolve_config_path(
         default=None,
     ),
     default=DEFAULT_DATA_FILE,
+    extra_env=_PROJECT_PATH_ENV,
 )
 
 RUN_NAME_BASE = str(
@@ -924,9 +1131,17 @@ OUTPUT_ROOT = resolve_config_path(
     first_config_value(
         topcfg("path_storage", None),
         cfg("output", "root_dir", None),
-        default=None,
+        cfg("paths", "path_storage", None),
+        default="${OUTPUT_ROOT}/runs",
     ),
     default=BASE_DIR / "runs",
+    extra_env={
+        "OUTPUT_ROOT": OUTPUT_ROOT_FROM_CONFIG,
+        "MICROLENSING_ROOT": MICROLENSING_ROOT,
+        "ULENSING_DEGENERATE_MODELS_ROOT": ULENSING_DEGENERATE_MODELS_ROOT,
+        "PARALLAX_LSST_BASE": BASE_DIR,
+        "ROMAN_RUBIN_DIR": ROMAN_RUBIN_DIR,
+    },
 )
 
 if CHUNK_OUTPUT_LABEL:
@@ -4621,6 +4836,11 @@ def main():
     run_config = {
         "CONFIG_PATH": str(CONFIG_PATH),
         "BASE_DIR": str(BASE_DIR),
+        "MICROLENSING_ROOT": str(MICROLENSING_ROOT),
+        "ULENSING_DEGENERATE_MODELS_ROOT": str(
+            ULENSING_DEGENERATE_MODELS_ROOT
+        ),
+        "OUTPUT_ROOT_FROM_CONFIG": str(OUTPUT_ROOT_FROM_CONFIG),
         "RUN_NAME_BASE": str(RUN_NAME_BASE),
         "CHUNK_OUTPUT_LABEL": str(CHUNK_OUTPUT_LABEL),
         "RUN_DIR": str(RUN_DIR),
