@@ -5,7 +5,22 @@ __pycache__/
 */runs/*
 # C extensions
 *.so
+# Manual backups
+*.bak
+*.before_*
+/Parallax_LSST/data_sedighe/
+/Parallax_LSST/lsstmonts_catalog_sedighe/resultsDb_sqlite.db
+# Runtime-generated configs
+.runtime_config_*.json
 
+# SLURM output
+slurm_logs/
+
+# Generated/local database
+resultsDb_sqlite.db
+
+# Local simulation/catalog data
+/data_sedighe/
 #
 *.png
 *.pdf
