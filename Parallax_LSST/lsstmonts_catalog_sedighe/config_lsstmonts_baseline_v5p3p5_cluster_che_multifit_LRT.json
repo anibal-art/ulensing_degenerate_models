@@ -9,7 +9,7 @@
     "output_root": "/export/storage3/rubin/microlensing/romanrubin/hidden_parallax"
   },
   "path_storage": "${OUTPUT_ROOT}/runs",
-  "run_name": "LSSTMONTS_xi_baseline_v5p3p5_hiddenParallax_truthFSPLparallax_multiFit_H0NoParallax_H1Parallax_t0pm60_DetectionFlag",
+  "run_name": "LSSTMONTS_xi_baseline_v5p3p5_hiddenParallax_truthFSPLparallax_multiFit_LRT_smallConservativeBounds",
   "model": "FSPL",
   "algo": "TRF",
   "system_type": "FFP",
@@ -40,62 +40,92 @@
     "bounds": {
       "t0": {
         "type": "center_width",
-        "half_width": 60.0
+        "half_width": 30.0
       },
-      "u0": [
-        -5.0,
-        5.0
-      ],
-      "tE": [
-        0.1,
-        20000.0
-      ]
+      "u0": {
+        "type": "center_width",
+        "half_width": 1.0
+      },
+      "tE": {
+        "type": "relative",
+        "frac": 1.0,
+        "lower": 0.1,
+        "upper": 20000.0,
+        "min_width": 0.1
+      },
+      "rho": {
+        "type": "relative",
+        "frac": 1.0,
+        "lower": 1e-07,
+        "upper": 10.0,
+        "min_width": 1e-07
+      }
     },
     "fits": {
       "H0": {
-        "label": "FSPL_no_parallax",
+        "label": "FSPL_no_parallax_small_bounds",
         "model": "FSPL",
         "parallax": false,
         "bounds": {
           "t0": {
             "type": "center_width",
-            "half_width": 60.0
+            "half_width": 30.0
           },
-          "u0": [
-            -5.0,
-            5.0
-          ],
-          "tE": [
-            0.1,
-            20000.0
-          ]
+          "u0": {
+            "type": "center_width",
+            "half_width": 1.0
+          },
+          "tE": {
+            "type": "relative",
+            "frac": 1.0,
+            "lower": 0.1,
+            "upper": 20000.0,
+            "min_width": 0.1
+          },
+          "rho": {
+            "type": "relative",
+            "frac": 1.0,
+            "lower": 1e-07,
+            "upper": 10.0,
+            "min_width": 1e-07
+          }
         }
       },
       "H1": {
-        "label": "FSPL_parallax",
+        "label": "FSPL_parallax_small_bounds",
         "model": "FSPL",
         "parallax": true,
         "bounds": {
           "t0": {
             "type": "center_width",
-            "half_width": 60.0
+            "half_width": 30.0
           },
-          "u0": [
-            -5.0,
-            5.0
-          ],
-          "tE": [
-            0.1,
-            20000.0
-          ],
-          "piEN": [
-            -5.0,
-            5.0
-          ],
-          "piEE": [
-            -5.0,
-            5.0
-          ]
+          "u0": {
+            "type": "center_width",
+            "half_width": 1.0
+          },
+          "tE": {
+            "type": "relative",
+            "frac": 1.0,
+            "lower": 0.1,
+            "upper": 20000.0,
+            "min_width": 0.1
+          },
+          "rho": {
+            "type": "relative",
+            "frac": 1.0,
+            "lower": 1e-07,
+            "upper": 10.0,
+            "min_width": 1e-07
+          },
+          "piEN": {
+            "type": "center_width",
+            "half_width": 1.0
+          },
+          "piEE": {
+            "type": "center_width",
+            "half_width": 1.0
+          }
         }
       }
     },
@@ -137,7 +167,7 @@
     "availability_note": "Use DetectionFlag_* columns to decide available catalog bands; do not infer band availability from blend_* == 0."
   },
   "execution": {
-    "workers": 12,
+    "workers": 1,
     "random_seed": 20260730,
     "prepare_only": false
   },

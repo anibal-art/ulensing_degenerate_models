@@ -1075,7 +1075,34 @@ configure_set_telescopes_module(
 )
 
 import functions_roman_rubin as frr  # noqa: E402
-sim_fit = frr.sim_fit
+
+# ---------------------------------------------------------------------------
+# Fit backend
+# ---------------------------------------------------------------------------
+# Standard behavior: one simulation + one fit through frr.sim_fit.
+# New hypothesis-test behavior: one simulation + multiple fits through
+# frr.sim_fit_multi_fits.  The choice is controlled only by the config file.
+RUN_MULTIPLE_FITS = bool(cfg("fit", "run_multiple_fits", False))
+FIT_SPECS = cfg("fit", "fits", None)
+PRIMARY_FIT = cfg("fit", "primary_fit", None)
+LRT_CONFIG = cfg("fit", "lrt", None)
+
+if RUN_MULTIPLE_FITS:
+    if not hasattr(frr, "sim_fit_multi_fits"):
+        raise RuntimeError(
+            "El config tiene fit.run_multiple_fits=true, pero "
+            "functions_roman_rubin.py no expone sim_fit_multi_fits. "
+            "Reemplazá functions_roman_rubin.py por la versión multi-fit."
+        )
+    sim_fit = frr.sim_fit_multi_fits
+else:
+    sim_fit = frr.sim_fit
+
+print(f"[config] RUN_MULTIPLE_FITS = {RUN_MULTIPLE_FITS}", flush=True)
+if RUN_MULTIPLE_FITS:
+    print(f"[config] PRIMARY_FIT = {PRIMARY_FIT}", flush=True)
+    print(f"[config] FIT_SPECS keys = {list(FIT_SPECS.keys()) if isinstance(FIT_SPECS, dict) else FIT_SPECS}", flush=True)
+    print(f"[config] LRT_CONFIG = {LRT_CONFIG}", flush=True)
 
 
 # ============================================================================
@@ -1393,6 +1420,10 @@ FIT_MODEL = str(
 
 FIT_PARALLAX = bool(
     cfg("fit", "parallax", False)
+)
+
+TRUTH_PARALLAX = bool(
+    cfg("truth", "parallax", True)
 )
 
 ALGO = str(
@@ -3653,6 +3684,10 @@ def task_metadata(base_row, task):
         "apply_detection_criteria": APPLY_DETECTION_CRITERIA,
         "apply_photometric_filter": APPLY_PHOTOMETRIC_FILTER,
         "fit_bounds": json.dumps(FIT_BOUNDS_NOPIE, default=str),
+        "run_multiple_fits": bool(RUN_MULTIPLE_FITS),
+        "primary_fit": PRIMARY_FIT if PRIMARY_FIT is not None else "",
+        "fit_specs": json.dumps(FIT_SPECS, default=str),
+        "lrt_config": json.dumps(LRT_CONFIG, default=str),
         "fit_window_t_min_jd": (
             float(fit_window[0])
             if fit_window is not None
@@ -4314,6 +4349,7 @@ def run_single_event(task):
                     "fit_model": config["fit_model"],
                     "fit_parallax": config["fit_parallax"],
                     "fit_bounds": config["fit_bounds"],
+                    "truth_parallax": config.get("truth_parallax", True),
                     "rubin_pointing_mode": config["rubin_pointing_mode"],
                     "rubin_cache_cell_deg": config["rubin_cache_cell_deg"],
                     "return_data": True,
@@ -4333,9 +4369,32 @@ def run_single_event(task):
                     if key in sim_fit_parameters and value not in (None, ""):
                         sim_fit_kwargs[key] = value
 
+                if config.get("run_multiple_fits", False):
+                    if "fit_specs" in sim_fit_parameters:
+                        sim_fit_kwargs["fit_specs"] = config.get("fit_specs", None)
+                    else:
+                        raise RuntimeError(
+                            "fit.run_multiple_fits=true, pero la función seleccionada "
+                            "no acepta fit_specs. Verificá que el runner esté usando "
+                            "functions_roman_rubin.sim_fit_multi_fits."
+                        )
+
+                    if "primary_fit" in sim_fit_parameters:
+                        sim_fit_kwargs["primary_fit"] = config.get("primary_fit", None)
+
+                    if "lrt_config" in sim_fit_parameters:
+                        sim_fit_kwargs["lrt_config"] = config.get("lrt_config", None)
+
+                    if "save_multi_fit_summary" in sim_fit_parameters:
+                        sim_fit_kwargs["save_multi_fit_summary"] = True
+
                 print("rubin_sim_data_dir =", config.get("rubin_sim_data_dir", ""))
                 print("rubin_throughputs_dir =", config.get("rubin_throughputs_dir", ""))
                 print("rubin_opsim_db_path =", config.get("rubin_opsim_db_path", ""))
+                print("run_multiple_fits =", config.get("run_multiple_fits", False))
+                print("primary_fit =", config.get("primary_fit", None))
+                print("fit_specs keys =", list(config.get("fit_specs", {}).keys()) if isinstance(config.get("fit_specs", None), dict) else config.get("fit_specs", None))
+                print("lrt_config =", config.get("lrt_config", None))
 
                 if "apply_detection_criteria" in sim_fit_parameters:
                     sim_fit_kwargs["apply_detection_criteria"] = config[
@@ -4390,6 +4449,53 @@ def run_single_event(task):
                         summary["status"] = "rejected_pipeline"
                     else:
                         summary["status"] = "returned_dict"
+
+                    # Multi-fit / likelihood-ratio diagnostics, when present.
+                    summary["multi_fit_status"] = str(
+                        result.get("multi_fit_status", "")
+                    )
+                    summary["primary_fit_key"] = str(
+                        result.get("primary_fit_key", "")
+                    )
+                    summary["multi_fit_summary_path"] = str(
+                        result.get("multi_fit_summary_path", "")
+                    )
+
+                    lrt_results = result.get("lrt_results", None)
+                    if isinstance(lrt_results, dict):
+                        for key, value in lrt_results.items():
+                            try:
+                                if isinstance(value, (np.generic,)):
+                                    value = value.item()
+                                summary[f"lrt_{key}"] = value
+                            except Exception:
+                                summary[f"lrt_{key}"] = repr(value)
+
+                    multi_record = result.get("multi_fit_summary_record", None)
+                    if isinstance(multi_record, dict):
+                        for key, value in multi_record.items():
+                            # Keep the run_summary compact but include the
+                            # quantities needed for hypothesis testing.
+                            if (
+                                key.startswith("H0_")
+                                or key.startswith("H1_")
+                                or key.startswith("true_generator_")
+                                or key in {
+                                    "LRT",
+                                    "LRT_from_nll",
+                                    "p_value_LRT",
+                                    "delta_k",
+                                    "delta_chi2_H0_minus_H1",
+                                    "oracle_LRT_true_vs_H0",
+                                    "delta_chi2_H0_minus_true_generator",
+                                }
+                            ):
+                                try:
+                                    if isinstance(value, (np.generic,)):
+                                        value = value.item()
+                                    summary[f"multi_{key}"] = value
+                                except Exception:
+                                    summary[f"multi_{key}"] = repr(value)
                 else:
                     summary["status"] = "ok"
                     summary["sim_fit_status"] = type(result).__name__
@@ -4532,6 +4638,12 @@ def print_diagnostics(
     print(f"Detection criteria:    {APPLY_DETECTION_CRITERIA}")
     print(f"Photometric filter:    {APPLY_PHOTOMETRIC_FILTER}")
     print(f"Fit bounds:            {FIT_BOUNDS_NOPIE}")
+    print(f"Truth parallax:        {TRUTH_PARALLAX}")
+    print(f"Run multiple fits:     {RUN_MULTIPLE_FITS}")
+    if RUN_MULTIPLE_FITS:
+        print(f"Primary fit:           {PRIMARY_FIT}")
+        print(f"Fit specs keys:        {list(FIT_SPECS.keys()) if isinstance(FIT_SPECS, dict) else FIT_SPECS}")
+        print(f"LRT config:            {LRT_CONFIG}")
     if FIT_WINDOW_ENABLED:
         print(
             "Fit-only window:      "
@@ -4892,6 +5004,11 @@ def main():
         "MODEL": MODEL,
         "FIT_MODEL": FIT_MODEL,
         "FIT_PARALLAX": FIT_PARALLAX,
+        "TRUTH_PARALLAX": TRUTH_PARALLAX,
+        "RUN_MULTIPLE_FITS": RUN_MULTIPLE_FITS,
+        "PRIMARY_FIT": PRIMARY_FIT,
+        "FIT_SPECS": FIT_SPECS,
+        "LRT_CONFIG": LRT_CONFIG,
         "APPLY_DETECTION_CRITERIA":
             APPLY_DETECTION_CRITERIA,
         "APPLY_PHOTOMETRIC_FILTER":
@@ -4959,6 +5076,11 @@ def main():
         "model": MODEL,
         "fit_model": FIT_MODEL,
         "fit_parallax": FIT_PARALLAX,
+        "truth_parallax": TRUTH_PARALLAX,
+        "run_multiple_fits": RUN_MULTIPLE_FITS,
+        "fit_specs": FIT_SPECS,
+        "primary_fit": PRIMARY_FIT,
+        "lrt_config": LRT_CONFIG,
         "algo": ALGO,
         "use_roman": USE_ROMAN,
         "use_rubin": USE_RUBIN,
@@ -5030,6 +5152,82 @@ def main():
         ] = mp_context
 
     summary_rows = []
+
+    # ------------------------------------------------------------------------
+    # Serial/debug mode.
+    #
+    # With workers=1 we avoid ProcessPool/fork completely.  This is useful on
+    # CHE to distinguish a real slow pyLIMA fit from multiprocessing/cache/SQLite
+    # interactions in rubin_sim/MAF.
+    # ------------------------------------------------------------------------
+    if workers == 1:
+        print("[main] Running in SERIAL mode because workers=1", flush=True)
+
+        init_worker(
+            prepared_catalog,
+            worker_config,
+        )
+
+        for completed, task in enumerate(
+            tasks,
+            start=1,
+        ):
+            try:
+                row = run_single_event(
+                    task,
+                )
+
+            except Exception as error:
+                row = {
+                    **task,
+                    "status": "serial_failed",
+                    "error": str(error),
+                }
+
+            summary_rows.append(row)
+            save_summary(summary_rows)
+
+            status_counts = pd.Series(
+                [
+                    item.get("status", "")
+                    for item in summary_rows
+                ]
+            ).value_counts()
+
+            status_text = ", ".join(
+                f"{status}={count}"
+                for status, count
+                in status_counts.items()
+            )
+
+            print(
+                f"[{completed}/{len(tasks)}] "
+                f"{status_text}",
+                flush=True,
+            )
+
+        summary = save_summary(
+            summary_rows
+        )
+
+        print("=" * 80)
+        print("Run finished")
+        print("=" * 80)
+
+        print(
+            summary["status"]
+            .value_counts(
+                dropna=False
+            )
+        )
+
+        print(
+            "Summary: "
+            f"{DIRS['logs'] / 'run_summary.parquet'}"
+        )
+
+        print("=" * 80)
+        return
 
     with ProcessPoolExecutor(
         **executor_kwargs

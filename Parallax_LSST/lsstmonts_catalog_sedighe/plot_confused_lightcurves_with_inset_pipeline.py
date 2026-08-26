@@ -416,6 +416,53 @@ def main():
 
     pipeline = import_pipeline_module(args.pipeline)
 
+
+    # ------------------------------------------------------------
+    # Force the temporary config to process ONLY the selected rows.
+    # Without this, the plotter reads enough rows to include global_i
+    # but leaves row window = [0, EOF), so run_dataset may process
+    # thousands of events before reaching the selected one.
+    # ------------------------------------------------------------
+    try:
+        import json
+        import pandas as _pd
+        from pathlib import Path as _Path
+
+        _events_for_row_window = _pd.read_csv(args.events_csv)
+        _global_indices_for_plot = (
+            _events_for_row_window["global_i"]
+            .astype(int)
+            .to_numpy()
+        )
+
+        _row_start = int(_global_indices_for_plot.min())
+        _row_stop = int(_global_indices_for_plot.max()) + 1
+
+        _plot_config_path = _Path(args.output_dir) / "plot_run_config.json"
+
+        with open(_plot_config_path) as _f:
+            _plot_cfg_dict = json.load(_f)
+
+        _plot_cfg_dict.setdefault("input", {})
+
+        # Keys used by the runner/pipeline.
+        _plot_cfg_dict["input"]["catalog_row_start"] = _row_start
+        _plot_cfg_dict["input"]["catalog_row_stop"] = _row_stop
+
+        # Keep read_nrows large enough so the selected row exists after reading.
+        _plot_cfg_dict["input"]["read_nrows"] = _row_stop
+
+        with open(_plot_config_path, "w") as _f:
+            json.dump(_plot_cfg_dict, _f, indent=2)
+
+        print("Temporary input.catalog_row_start:", _row_start)
+        print("Temporary input.catalog_row_stop :", _row_stop)
+        print("Temporary input.read_nrows        :", _row_stop)
+
+    except Exception as _e:
+        print("[warning] Could not force row window in temporary plot config:", repr(_e))
+
+
     cfg = pipeline.SedighePipelineConfig.from_config_file(
         runner_path=Path(args.runner).expanduser().resolve(),
         config_path=temp_config_path,

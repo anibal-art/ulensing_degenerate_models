@@ -1128,6 +1128,17 @@ def install_seeded_fit_patch(runner):
 def load_catalog_and_tasks(runner, config: SedighePipelineConfig):
     """
     Carga catálogo crudo, prepara catálogo y construye tasks.
+
+    Fix para plotting:
+    si config.global_indices contiene eventos específicos, no leemos
+    desde la fila 0 hasta max(global_i). Leemos solamente la ventana
+    cruda mínima que contiene esos global_i:
+
+        catalog_row_start = min(global_indices)
+        catalog_row_stop  = max(global_indices) + 1
+
+    y pasamos catalog_row_offset a prepare_catalog para que los global_i
+    preparados sigan siendo los índices globales originales.
     """
 
     read_nrows = None
@@ -1143,21 +1154,68 @@ def load_catalog_and_tasks(runner, config: SedighePipelineConfig):
         else:
             read_nrows = _parse_all_or_int(read_nrows)
 
+    # ------------------------------------------------------------
+    # Determinar ventana de catálogo.
+    # Para el uso normal sin global_indices, conserva comportamiento viejo.
+    # Para plotting de eventos seleccionados, lee solo esas filas.
+    # ------------------------------------------------------------
+
+    catalog_row_start = 0
+    catalog_row_stop = None
+
+    global_indices = getattr(config, "global_indices", None)
+
+    if global_indices is not None and len(global_indices) > 0:
+        global_indices = [int(x) for x in global_indices]
+
+        catalog_row_start = int(min(global_indices))
+        catalog_row_stop = int(max(global_indices)) + 1
+
+        window_nrows = catalog_row_stop - catalog_row_start
+
+        if read_nrows is None:
+            read_nrows = window_nrows
+        else:
+            read_nrows = min(int(read_nrows), int(window_nrows))
+
+        if getattr(config, "verbose", True):
+            print(
+                "[pipeline] Using catalog row window from global_indices:",
+                f"[{catalog_row_start}, {catalog_row_stop})",
+                flush=True,
+            )
+
     raw_catalog = runner.load_raw_catalog(
         runner.COLUMNS_FILE,
         runner.DATA_FILE,
         nrows=read_nrows,
+        catalog_row_start=catalog_row_start,
+        catalog_row_stop=catalog_row_stop,
     )
 
-    if config.max_base_events is None:
-        prepared_catalog, invalid_catalog = runner.prepare_catalog(
-            raw_catalog,
-        )
-    else:
-        prepared_catalog, invalid_catalog = runner.prepare_catalog(
-            raw_catalog,
-            max_base_events=int(config.max_base_events),
-        )
+    # ------------------------------------------------------------
+    # Preparar catálogo conservando global_i correcto.
+    # Si el runner acepta catalog_row_offset, se lo pasamos.
+    # ------------------------------------------------------------
+
+    prepare_kwargs = {
+        "max_base_events": config.max_base_events,
+    }
+
+    try:
+        import inspect as _inspect
+        prepare_params = _inspect.signature(runner.prepare_catalog).parameters
+
+        if "catalog_row_offset" in prepare_params:
+            prepare_kwargs["catalog_row_offset"] = int(catalog_row_start)
+
+    except Exception:
+        pass
+
+    prepared_catalog, invalid_catalog = runner.prepare_catalog(
+        raw_catalog,
+        **prepare_kwargs,
+    )
 
     tasks = runner.build_tasks(
         prepared_catalog,
