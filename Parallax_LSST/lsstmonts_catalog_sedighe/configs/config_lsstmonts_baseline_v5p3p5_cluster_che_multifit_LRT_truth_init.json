@@ -1,0 +1,195 @@
+{
+  "paths": {
+    "microlensing_root": "/home/anibalvarela/microlensing",
+    "roman_rubin_dir": "/home/anibalvarela/microlensing/simulation_Rubin/roman_rubin",
+    "roman_ephemerides": "${ROMAN_RUBIN_DIR}/ephemerides/Roman_positions.npy",
+    "ulensing_degenerate_models_root": "/export/storage3/rubin/microlensing/romanrubin/ulensing_degenerate_models",
+    "parallax_lsst_root": "${ULENSING_DEGENERATE_MODELS_ROOT}/Parallax_LSST",
+    "runner_path": "${PARALLAX_LSST_BASE}/lsstmonts_catalog_sedighe/run_lsstmonts_catalog_hidden_parallax.py",
+    "output_root": "/export/storage3/rubin/microlensing/romanrubin/hidden_parallax"
+  },
+  "path_storage": "${OUTPUT_ROOT}/runs",
+  "run_name": "LSSTMONTS_xi_baseline_v5p3p5_hiddenParallax_truthInit_truthFSPLparallax_multiFit_LRT_smallConservativeBounds",
+  "model": "FSPL",
+  "algo": "TRF",
+  "system_type": "FFP",
+  "N_tr": 4,
+  "Nevents": "all",
+  "n_db_file": 1,
+  "input": {
+    "type": "sedighe_lsstmonts",
+    "columns_file": "${PARALLAX_LSST_BASE}/data_sedighe/columns",
+    "data_file": "${PARALLAX_LSST_BASE}/data_sedighe/LSSTMONTS.dat",
+    "read_nrows": "all",
+    "t0_zero_jd": 2460413.013828608,
+    "t0_origin": "first_maf_timestamp"
+  },
+  "observing": {
+    "use_roman": false,
+    "use_rubin": true
+  },
+  "truth": {
+    "parallax": true
+  },
+  "fit": {
+    "model": "FSPL",
+    "parallax": false,
+    "algorithm": "TRF",
+    "run_multiple_fits": true,
+    "primary_fit": "H0",
+    "bounds": {
+      "t0": {
+        "type": "center_width",
+        "half_width": 30.0
+      },
+      "u0": {
+        "type": "center_width",
+        "half_width": 1.0
+      },
+      "tE": {
+        "type": "relative",
+        "frac": 1.0,
+        "lower": 0.1,
+        "upper": 20000.0,
+        "min_width": 0.1
+      },
+      "rho": {
+        "type": "relative",
+        "frac": 1.0,
+        "lower": 1e-07,
+        "upper": 10.0,
+        "min_width": 1e-07
+      }
+    },
+    "fits": {
+      "H0": {
+        "label": "FSPL_no_parallax_small_bounds",
+        "model": "FSPL",
+        "parallax": false,
+        "bounds": {
+          "t0": {
+            "type": "center_width",
+            "half_width": 30.0
+          },
+          "u0": {
+            "type": "center_width",
+            "half_width": 1.0
+          },
+          "tE": {
+            "type": "relative",
+            "frac": 1.0,
+            "lower": 0.1,
+            "upper": 20000.0,
+            "min_width": 0.1
+          },
+          "rho": {
+            "type": "relative",
+            "frac": 1.0,
+            "lower": 1e-07,
+            "upper": 10.0,
+            "min_width": 1e-07
+          }
+        }
+      },
+      "H1": {
+        "label": "FSPL_parallax_small_bounds",
+        "model": "FSPL",
+        "parallax": true,
+        "bounds": {
+          "t0": {
+            "type": "center_width",
+            "half_width": 30.0
+          },
+          "u0": {
+            "type": "center_width",
+            "half_width": 1.0
+          },
+          "tE": {
+            "type": "relative",
+            "frac": 1.0,
+            "lower": 0.1,
+            "upper": 20000.0,
+            "min_width": 0.1
+          },
+          "rho": {
+            "type": "relative",
+            "frac": 1.0,
+            "lower": 1e-07,
+            "upper": 10.0,
+            "min_width": 1e-07
+          },
+          "piEN": {
+            "type": "center_width",
+            "half_width": 1.0
+          },
+          "piEE": {
+            "type": "center_width",
+            "half_width": 1.0
+          }
+        }
+      }
+    },
+    "lrt": {
+      "null": "H0",
+      "alternative": "H1",
+      "delta_k": 2
+    },
+    "time_window": {
+      "enabled": false,
+      "mode": "t0_pm_factor_tE",
+      "factor": 3.5,
+      "minimum_total_points": 10
+    },
+    "initial_guess": "truth"
+  },
+  "simulation": {
+    "catalog_mode": "sedighe_lsstmonts",
+    "system_type_internal": "FFP",
+    "apply_detection_criteria": false,
+    "rubin_pointing_mode": "source",
+    "rubin_cache_cell_deg": 0.2,
+    "time_window": null,
+    "apply_photometric_filter": true
+  },
+  "rubin": {
+    "sim_data_dir": "/share/storage3/rubin/microlensing/romanrubin/rubin_sim_data",
+    "opsim_db_path": "${RUBIN_SIM_DATA_DIR}/sim_baseline/sim_baseline_2026_07_23/sim_baseline/baseline_v5.3.5_10yrs.db",
+    "throughputs_dir": "${RUBIN_SIM_DATA_DIR}/throughputs/baseline"
+  },
+  "sedighe": {
+    "angle_column": "xi",
+    "angle_unit": "degrees",
+    "angle_basis": "galactic_n1n2",
+    "component_convention": "east_cos_north_sin",
+    "blending_mode": "catalog_source_fraction",
+    "zero_means_unavailable_filter": false,
+    "minimum_visible_filters": 3,
+    "band_availability": "detection_flag",
+    "availability_note": "Use DetectionFlag_* columns to decide available catalog bands; do not infer band availability from blend_* == 0."
+  },
+  "execution": {
+    "workers": 1,
+    "random_seed": 20260730,
+    "prepare_only": false
+  },
+  "hidden_parallax": {
+    "out_dir": "${OUTPUT_ROOT}/pipeline",
+    "return_data": true,
+    "reset_output": false,
+    "append_summary": true,
+    "summary_name": "run_summary.parquet",
+    "make_plots": false,
+    "plot_style": "aligned_inset",
+    "reference_band": "g",
+    "allow_reference_band_fallback": true,
+    "plot_n_dense": 10000,
+    "plot_n_tE": 10.0,
+    "plot_inset_n_tE": 4.0,
+    "plot_inset_loc": "upper left",
+    "plot_show_true_no_parallax_reference": false,
+    "plot_fit_trajectory_time_mode": "own_fit_tE_window",
+    "plot_residuals": true,
+    "save_plot_dpi": 180,
+    "verbose": true
+  }
+}

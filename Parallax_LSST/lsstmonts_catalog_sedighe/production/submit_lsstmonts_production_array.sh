@@ -13,7 +13,7 @@ RUN_DIR="/export/storage3/rubin/microlensing/romanrubin/ulensing_degenerate_mode
 OUTPUT_ROOT="/export/storage3/rubin/microlensing/romanrubin/hidden_parallax"
 
 RUNNER_SOURCE="${PROJECT_DIR}/run_lsstmonts_catalog_hidden_parallax.py"
-CONFIG_SOURCE="${PROJECT_DIR}/configs/config_lsstmonts_baseline_v5p3p5_cluster_che_multifit_LRT.json"
+CONFIG_SOURCE="${PROJECT_DIR}/configs/config_lsstmonts_baseline_v5p3p5_cluster_che_multifit_LRT_truth_init.json"
 SLURM_SCRIPT="${SCRIPT_DIR}/run_lsstmonts_production_array.slurm"
 
 # Full LSSTMONTS catalog has 966000 rows.

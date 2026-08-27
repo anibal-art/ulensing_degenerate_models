@@ -1422,6 +1422,53 @@ FIT_PARALLAX = bool(
     cfg("fit", "parallax", False)
 )
 
+
+# ============================================================
+# Initial guess del optimizador
+# ============================================================
+
+FIT_INITIAL_GUESS = cfg(
+    "fit",
+    "initial_guess",
+    None,
+)
+
+if isinstance(FIT_INITIAL_GUESS, str):
+
+    _initial_guess_mode = FIT_INITIAL_GUESS.strip().lower()
+
+    if _initial_guess_mode in {
+        "",
+        "none",
+        "null",
+        "random",
+    }:
+        FIT_INITIAL_GUESS = None
+
+    elif _initial_guess_mode in {
+        "truth",
+        "fit_params",
+    }:
+        FIT_INITIAL_GUESS = _initial_guess_mode
+
+    else:
+        raise ValueError(
+            "fit.initial_guess no reconocido: "
+            f"{FIT_INITIAL_GUESS!r}"
+        )
+
+elif (
+    FIT_INITIAL_GUESS is not None
+    and not isinstance(
+        FIT_INITIAL_GUESS,
+        (dict, list, tuple),
+    )
+):
+    raise TypeError(
+        "fit.initial_guess debe ser "
+        "null, string, dict, list o tuple."
+    )
+
 TRUTH_PARALLAX = bool(
     cfg("truth", "parallax", True)
 )
@@ -3684,6 +3731,18 @@ def task_metadata(base_row, task):
         "apply_detection_criteria": APPLY_DETECTION_CRITERIA,
         "apply_photometric_filter": APPLY_PHOTOMETRIC_FILTER,
         "fit_bounds": json.dumps(FIT_BOUNDS_NOPIE, default=str),
+        "fit_initial_guess": (
+            FIT_INITIAL_GUESS
+            if isinstance(FIT_INITIAL_GUESS, str)
+            else (
+                "random"
+                if FIT_INITIAL_GUESS is None
+                else json.dumps(
+                    FIT_INITIAL_GUESS,
+                    default=str,
+                )
+            )
+        ),
         "run_multiple_fits": bool(RUN_MULTIPLE_FITS),
         "primary_fit": PRIMARY_FIT if PRIMARY_FIT is not None else "",
         "fit_specs": json.dumps(FIT_SPECS, default=str),
@@ -4359,6 +4418,22 @@ def run_single_event(task):
 
                 sim_fit_parameters = inspect.signature(sim_fit).parameters
 
+                if "initial_guess" in sim_fit_parameters:
+
+                    sim_fit_kwargs["initial_guess"] = config.get(
+                        "initial_guess",
+                        None,
+                    )
+
+                elif config.get("initial_guess", None) is not None:
+
+                    raise RuntimeError(
+                        "El config define fit.initial_guess, "
+                        "pero la función seleccionada "
+                        f"{getattr(sim_fit, '__name__', sim_fit)!r} "
+                        "no acepta initial_guess."
+                    )
+
                 optional_sim_fit_path_kwargs = {
                     "opsim_db_path": config.get("rubin_opsim_db_path", None),
                     "rubin_sim_data_dir": config.get("rubin_sim_data_dir", None),
@@ -4392,6 +4467,7 @@ def run_single_event(task):
                 print("rubin_throughputs_dir =", config.get("rubin_throughputs_dir", ""))
                 print("rubin_opsim_db_path =", config.get("rubin_opsim_db_path", ""))
                 print("run_multiple_fits =", config.get("run_multiple_fits", False))
+                print("initial_guess =", config.get("initial_guess", None))
                 print("primary_fit =", config.get("primary_fit", None))
                 print("fit_specs keys =", list(config.get("fit_specs", {}).keys()) if isinstance(config.get("fit_specs", None), dict) else config.get("fit_specs", None))
                 print("lrt_config =", config.get("lrt_config", None))
@@ -4638,6 +4714,10 @@ def print_diagnostics(
     print(f"Detection criteria:    {APPLY_DETECTION_CRITERIA}")
     print(f"Photometric filter:    {APPLY_PHOTOMETRIC_FILTER}")
     print(f"Fit bounds:            {FIT_BOUNDS_NOPIE}")
+    print(
+        "Initial guess:         "
+        f"{FIT_INITIAL_GUESS if FIT_INITIAL_GUESS is not None else 'random'}"
+    )
     print(f"Truth parallax:        {TRUTH_PARALLAX}")
     print(f"Run multiple fits:     {RUN_MULTIPLE_FITS}")
     if RUN_MULTIPLE_FITS:
@@ -4874,6 +4954,17 @@ def main():
             "Propagalo por sim_fit -> simulate_event_for_fit -> sim_event."
         )
 
+
+    if (
+        FIT_INITIAL_GUESS is not None
+        and "initial_guess" not in sim_fit_parameters
+    ):
+        raise RuntimeError(
+            "fit.initial_guess está definido, pero "
+            f"{getattr(sim_fit, '__name__', sim_fit)!r} "
+            "no acepta initial_guess."
+        )
+
     log_step("[main] Loading raw catalog ...")
     raw_catalog = load_raw_catalog(
         COLUMNS_FILE,
@@ -5022,6 +5113,8 @@ def main():
             RUBIN_CACHE_CELL_DEG,
         "FIT_BOUNDS_NOPIE":
             FIT_BOUNDS_NOPIE,
+        "FIT_INITIAL_GUESS":
+            FIT_INITIAL_GUESS,
         "SIMULATION_TIME_RANGE": "complete MAF cadence",
         "FIT_WINDOW_ENABLED": FIT_WINDOW_ENABLED,
         "FIT_WINDOW_HALF_WIDTH_TE": FIT_WINDOW_HALF_WIDTH_TE,
@@ -5110,6 +5203,8 @@ def main():
         ),
         "fit_bounds":
             FIT_BOUNDS_NOPIE,
+        "initial_guess":
+            FIT_INITIAL_GUESS,
         "rubin_pointing_mode":
             RUBIN_POINTING_MODE,
         "rubin_cache_cell_deg":
