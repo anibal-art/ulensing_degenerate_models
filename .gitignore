@@ -236,3 +236,5 @@ __marimo__/
 
 # Streamlit
 .streamlit/secrets.toml
+/Parallax_LSST/lsstmonts_catalog_sedighe/scratch/
+*.py[cod]

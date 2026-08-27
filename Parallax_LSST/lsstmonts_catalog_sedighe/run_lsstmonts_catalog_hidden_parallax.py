@@ -46,12 +46,12 @@ No source file in the Roman-Rubin pipeline is overwritten.
 Usage
 -----
     python run_lsstmonts_catalog_hidden_parallax.py \
-        --config config_lsstmonts_baseline_v5p3p5.json
+        --config configs/config_lsstmonts_baseline_v5p3p5.json
 
 Preparation/validation only
 ---------------------------
     python run_lsstmonts_catalog_hidden_parallax.py \
-        --config config_lsstmonts_baseline_v5p3p5.json \
+        --config configs/config_lsstmonts_baseline_v5p3p5.json \
         --prepare-only
 """
 

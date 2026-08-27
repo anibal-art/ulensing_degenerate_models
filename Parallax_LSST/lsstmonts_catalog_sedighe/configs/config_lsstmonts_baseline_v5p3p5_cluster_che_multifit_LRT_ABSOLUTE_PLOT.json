@@ -8,7 +8,7 @@
     "runner_path": "/share/storage3/rubin/microlensing/romanrubin/ulensing_degenerate_models/Parallax_LSST/lsstmonts_catalog_sedighe/run_lsstmonts_catalog_hidden_parallax.py",
     "output_root": "/export/storage3/rubin/microlensing/romanrubin/hidden_parallax",
     "pipeline_path": "/share/storage3/rubin/microlensing/romanrubin/ulensing_degenerate_models/Parallax_LSST/lsstmonts_catalog_sedighe/pipeline_hidden_parallax.py",
-    "plot_script": "/share/storage3/rubin/microlensing/romanrubin/ulensing_degenerate_models/Parallax_LSST/lsstmonts_catalog_sedighe/plot_confused_lightcurves_with_inset_pipeline.py"
+    "plot_script": "/share/storage3/rubin/microlensing/romanrubin/ulensing_degenerate_models/Parallax_LSST/lsstmonts_catalog_sedighe/analysis/plot_confused_lightcurves_with_inset_pipeline.py"
   },
   "path_storage": "${OUTPUT_ROOT}/runs",
   "run_name": "LSSTMONTS_xi_baseline_v5p3p5_hiddenParallax_truthFSPLparallax_multiFit_LRT_smallConservativeBounds",

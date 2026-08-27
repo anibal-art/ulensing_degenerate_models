@@ -73,7 +73,7 @@ DEFAULT_PLOT_SCRIPT = SCRIPT_DIR / "plot_confused_lightcurves_with_inset_pipelin
 DEFAULT_PIPELINE = SCRIPT_DIR / "pipeline_hidden_parallax.py"
 DEFAULT_RUNNER = SCRIPT_DIR / "run_lsstmonts_catalog_hidden_parallax.py"
 
-DEFAULT_CONFIG = SCRIPT_DIR / "config_lsstmonts_baseline_v5p3p5_cluster_che_multifit_LRT.json"
+DEFAULT_CONFIG = SCRIPT_DIR.parent / "configs" / "config_lsstmonts_baseline_v5p3p5_cluster_che_multifit_LRT.json"
 
 
 # ============================================================

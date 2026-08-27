@@ -8,12 +8,12 @@ BASE = Path(
 
 HERE = BASE / "lsstmonts_catalog_sedighe"
 
-SRC = HERE / "config_lsstmonts_baseline_v5p3p5_cluster_che_multifit_LRT.json"
-DST = HERE / "config_lsstmonts_baseline_v5p3p5_cluster_che_multifit_LRT_ABSOLUTE_PLOT.json"
+SRC = PROJECT_DIR / "configs" / "config_lsstmonts_baseline_v5p3p5_cluster_che_multifit_LRT.json"
+DST = PROJECT_DIR / "configs" / "config_lsstmonts_baseline_v5p3p5_cluster_che_multifit_LRT_ABSOLUTE_PLOT.json"
 
 RUNNER = HERE / "run_lsstmonts_catalog_hidden_parallax.py"
 PIPELINE = HERE / "pipeline_hidden_parallax.py"
-PLOT_SCRIPT = HERE / "plot_confused_lightcurves_with_inset_pipeline.py"
+PLOT_SCRIPT = PROJECT_DIR / "analysis" / "plot_confused_lightcurves_with_inset_pipeline.py"
 
 assert SRC.exists(), SRC
 assert RUNNER.exists(), RUNNER

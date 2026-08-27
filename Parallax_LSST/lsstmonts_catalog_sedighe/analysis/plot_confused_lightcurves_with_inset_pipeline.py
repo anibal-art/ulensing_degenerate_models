@@ -38,7 +38,7 @@ DEFAULT_RUNNER = DEFAULT_PROJECT_DIR / "run_lsstmonts_catalog_hidden_parallax.py
 
 DEFAULT_PIPELINE = DEFAULT_PROJECT_DIR / "pipeline_hidden_parallax.py"
 
-DEFAULT_CONFIG = DEFAULT_PROJECT_DIR / "config_lsstmonts_baseline_v5p3p5.json"
+DEFAULT_CONFIG = DEFAULT_PROJECT_DIR / "configs" / "config_lsstmonts_baseline_v5p3p5.json"
 
 DEFAULT_ROMAN_RUBIN_DIR = Path(
     "/home/anibal/microlensing/simulation_Rubin/roman_rubin"
