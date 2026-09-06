@@ -1,0 +1,11 @@
+
+
+# BEGIN hidden-parallax runtime ignores
+*.bak
+*.bak_before_*
+__pycache__/
+*.pyc
+slurm_logs/
+.DS_Store
+*~
+# END hidden-parallax runtime ignores
