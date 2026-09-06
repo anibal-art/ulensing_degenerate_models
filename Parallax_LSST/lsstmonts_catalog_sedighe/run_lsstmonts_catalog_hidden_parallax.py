@@ -72,6 +72,7 @@ import json
 import argparse
 import traceback
 import inspect
+import time
 import shutil
 import multiprocessing as mp
 from pathlib import Path
@@ -1469,6 +1470,104 @@ elif (
         "null, string, dict, list o tuple."
     )
 
+# ============================================================
+# Opciones del optimizador TRF
+# ============================================================
+
+FIT_OPTIMIZER_OPTIONS = cfg(
+    "fit",
+    "optimizer_options",
+    None,
+)
+
+if FIT_OPTIMIZER_OPTIONS is not None:
+
+    if not isinstance(FIT_OPTIMIZER_OPTIONS, dict):
+        raise TypeError(
+            "fit.optimizer_options debe ser null o dict."
+        )
+
+    FIT_OPTIMIZER_OPTIONS = dict(
+        FIT_OPTIMIZER_OPTIONS
+    )
+
+    allowed_optimizer_keys = {
+        "xtol",
+        "ftol",
+        "gtol",
+        "max_nfev",
+        "x_scale",
+    }
+
+    unknown = (
+        set(FIT_OPTIMIZER_OPTIONS)
+        - allowed_optimizer_keys
+    )
+
+    if unknown:
+        raise ValueError(
+            "Claves no soportadas en fit.optimizer_options: "
+            f"{sorted(unknown)}"
+        )
+
+    for key in ("xtol", "ftol", "gtol"):
+
+        if key in FIT_OPTIMIZER_OPTIONS:
+
+            value = float(
+                FIT_OPTIMIZER_OPTIONS[key]
+            )
+
+            if not np.isfinite(value) or value <= 0:
+                raise ValueError(
+                    f"fit.optimizer_options.{key} "
+                    "debe ser finito y > 0."
+                )
+
+            FIT_OPTIMIZER_OPTIONS[key] = value
+
+    if "max_nfev" in FIT_OPTIMIZER_OPTIONS:
+
+        value = int(
+            FIT_OPTIMIZER_OPTIONS["max_nfev"]
+        )
+
+        if value <= 0:
+            raise ValueError(
+                "fit.optimizer_options.max_nfev debe ser > 0."
+            )
+
+        FIT_OPTIMIZER_OPTIONS[
+            "max_nfev"
+        ] = value
+
+    if "x_scale" in FIT_OPTIMIZER_OPTIONS:
+
+        value = FIT_OPTIMIZER_OPTIONS["x_scale"]
+
+        if isinstance(value, str):
+
+            if value.lower() != "jac":
+                raise ValueError(
+                    "fit.optimizer_options.x_scale "
+                    "debe ser 'jac' o un escalar positivo."
+                )
+
+            FIT_OPTIMIZER_OPTIONS["x_scale"] = "jac"
+
+        else:
+
+            value = float(value)
+
+            if not np.isfinite(value) or value <= 0:
+                raise ValueError(
+                    "fit.optimizer_options.x_scale "
+                    "debe ser 'jac' o un escalar positivo."
+                )
+
+            FIT_OPTIMIZER_OPTIONS["x_scale"] = value
+
+
 TRUTH_PARALLAX = bool(
     cfg("truth", "parallax", True)
 )
@@ -2260,6 +2359,1287 @@ def extract_lightcurves_for_fit_catalog_window(pyLIMA_model):
     return lc_to_fit, lc_to_save
 
 
+
+# ============================================================================
+# PREFIT_DETECTABILITY_RUNTIME_PATCH_V1
+#
+# Noise-independent pre-fit microlensing detectability audit/gate.
+#
+# Scientific purpose
+# ------------------
+# Decide whether the Rubin cadence actually contains an appreciable
+# microlensing signal BEFORE attempting H0/H1 fits.
+#
+# Selection is deliberately based on a no-parallax reference FSPL by default,
+# so the sample definition does not depend on the parallax signal that will
+# subsequently be tested with the LRT.
+#
+# The criterion uses noiseless mag_model and the expected err_mag at the
+# actual simulated Rubin timestamps after the photometric filtering.
+# ============================================================================
+
+_ORIGINAL_SIM_EVENT_PREFIT_DETECTABILITY = None
+_PREFIT_DETECTABILITY_PATCH_INSTALLED = False
+_RUNTIME_LAST_DETECTABILITY = {}
+
+
+def _prefit_detectability_config():
+    """
+    Resolve selection.prefit_detectability.
+
+    Fallback:
+        simulation.prefit_detectability
+
+    Disabled by default, preserving all historical runs.
+    """
+
+    raw = cfg(
+        "selection",
+        "prefit_detectability",
+        None,
+    )
+
+    if raw is None:
+        raw = cfg(
+            "simulation",
+            "prefit_detectability",
+            None,
+        )
+
+    if raw is None:
+        raw = {}
+
+    if isinstance(raw, bool):
+        raw = {
+            "enabled": bool(raw),
+        }
+
+    if not isinstance(raw, dict):
+        raise TypeError(
+            "selection.prefit_detectability must be a dict, bool, or null."
+        )
+
+    out = {
+        "enabled": bool(
+            raw.get(
+                "enabled",
+                False,
+            )
+        ),
+
+        # If true:
+        #   simulate + audit + reject before fit, independently of pass/fail.
+        "audit_only": bool(
+            raw.get(
+                "audit_only",
+                False,
+            )
+        ),
+
+        # Recommended:
+        #   no_parallax
+        #
+        # Alternative diagnostic:
+        #   current_truth
+        "reference_model": str(
+            raw.get(
+                "reference_model",
+                "no_parallax",
+            )
+        ).strip().lower(),
+
+        # "rubin", "active", or explicit list of bands.
+        "bands": raw.get(
+            "bands",
+            "rubin",
+        ),
+
+        "peak_window_tE": float(
+            raw.get(
+                "peak_window_tE",
+                1.0,
+            )
+        ),
+
+        "min_total_points": int(
+            raw.get(
+                "min_total_points",
+                10,
+            )
+        ),
+
+        "min_bands": int(
+            raw.get(
+                "min_bands",
+                3,
+            )
+        ),
+
+        "min_peak_points": int(
+            raw.get(
+                "min_peak_points",
+                5,
+            )
+        ),
+
+        "min_left_peak_points": int(
+            raw.get(
+                "min_left_peak_points",
+                1,
+            )
+        ),
+
+        "min_right_peak_points": int(
+            raw.get(
+                "min_right_peak_points",
+                1,
+            )
+        ),
+
+        "nsigma": float(
+            raw.get(
+                "nsigma",
+                3.0,
+            )
+        ),
+
+        "min_nsigma_points": int(
+            raw.get(
+                "min_nsigma_points",
+                6,
+            )
+        ),
+
+        "min_delta_chi2_per_point": float(
+            raw.get(
+                "min_delta_chi2_per_point",
+                2.0,
+            )
+        ),
+
+        # None means diagnostic only.
+        "max_nearest_peak_distance_tE": raw.get(
+            "max_nearest_peak_distance_tE",
+            None,
+        ),
+    }
+
+    if out["reference_model"] not in {
+        "no_parallax",
+        "current_truth",
+    }:
+        raise ValueError(
+            "prefit_detectability.reference_model must be "
+            "'no_parallax' or 'current_truth'."
+        )
+
+    if out["peak_window_tE"] <= 0:
+        raise ValueError(
+            "peak_window_tE must be > 0."
+        )
+
+    if out["min_total_points"] < 0:
+        raise ValueError(
+            "min_total_points must be >= 0."
+        )
+
+    if out["min_bands"] < 0:
+        raise ValueError(
+            "min_bands must be >= 0."
+        )
+
+    if out["nsigma"] <= 0:
+        raise ValueError(
+            "nsigma must be > 0."
+        )
+
+    if out["min_delta_chi2_per_point"] < 0:
+        raise ValueError(
+            "min_delta_chi2_per_point must be >= 0."
+        )
+
+    nearest = out[
+        "max_nearest_peak_distance_tE"
+    ]
+
+    if nearest is not None:
+        nearest = float(nearest)
+
+        if nearest <= 0:
+            raise ValueError(
+                "max_nearest_peak_distance_tE must be > 0 or null."
+            )
+
+        out[
+            "max_nearest_peak_distance_tE"
+        ] = nearest
+
+    return out
+
+
+def _prefit_plain_array(values):
+    if hasattr(values, "value"):
+        values = values.value
+
+    return np.asarray(
+        values,
+        dtype=float,
+    )
+
+
+def _prefit_selected_band(
+    band_name,
+    bands_config,
+):
+    band_name = str(
+        band_name
+    )
+
+    if isinstance(
+        bands_config,
+        str,
+    ):
+        mode = bands_config.strip().lower()
+
+        if mode == "rubin":
+            return band_name in {
+                "u",
+                "g",
+                "r",
+                "i",
+                "z",
+                "y",
+            }
+
+        if mode == "active":
+            return True
+
+        return (
+            band_name.lower()
+            == mode
+        )
+
+    if isinstance(
+        bands_config,
+        (list, tuple, set),
+    ):
+        allowed = {
+            str(x)
+            for x in bands_config
+        }
+
+        return (
+            band_name
+            in allowed
+        )
+
+    raise TypeError(
+        "prefit_detectability.bands must be "
+        "'rubin', 'active', a band name, or a list."
+    )
+
+
+def _compute_prefit_detectability_metrics(
+    pyLIMA_model,
+    event_data,
+    detect_cfg,
+):
+    """
+    Compute a noise-independent microlensing-vs-constant diagnostic.
+
+    For each band, fit the best weighted constant magnitude:
+
+        m0 = sum(w_i m_i) / sum(w_i)
+
+    using noiseless model magnitudes.
+
+    Then:
+
+        Delta chi2_const =
+            sum_i [(m_model_i - m0_band)/sigma_i]^2
+
+    This is an Asimov expected signal metric evaluated at the
+    ACTUAL Rubin timestamps and photometric uncertainties.
+    """
+
+    out = {
+        "detectability_enabled": True,
+        "detectability_audit_only": bool(
+            detect_cfg[
+                "audit_only"
+            ]
+        ),
+        "detectability_reference_model": str(
+            detect_cfg[
+                "reference_model"
+            ]
+        ),
+        "detectability_noise_independent": True,
+
+        "detectability_n_obs": 0,
+        "detectability_n_bands": 0,
+
+        "detectability_n_peak": 0,
+        "detectability_n_left_peak": 0,
+        "detectability_n_right_peak": 0,
+
+        "detectability_nearest_dt_over_tE": np.nan,
+
+        "detectability_delta_chi2_const_asimov": 0.0,
+        "detectability_delta_chi2_per_point": np.nan,
+
+        "detectability_n_nsigma": 0,
+        "detectability_max_snr": 0.0,
+
+        "detectability_pass": False,
+        "detectability_reasons": "",
+    }
+
+    # Save thresholds explicitly.
+    out[
+        "detectability_threshold_min_total_points"
+    ] = int(
+        detect_cfg[
+            "min_total_points"
+        ]
+    )
+
+    out[
+        "detectability_threshold_min_bands"
+    ] = int(
+        detect_cfg[
+            "min_bands"
+        ]
+    )
+
+    out[
+        "detectability_threshold_min_peak_points"
+    ] = int(
+        detect_cfg[
+            "min_peak_points"
+        ]
+    )
+
+    out[
+        "detectability_threshold_min_left_peak_points"
+    ] = int(
+        detect_cfg[
+            "min_left_peak_points"
+        ]
+    )
+
+    out[
+        "detectability_threshold_min_right_peak_points"
+    ] = int(
+        detect_cfg[
+            "min_right_peak_points"
+        ]
+    )
+
+    out[
+        "detectability_threshold_nsigma"
+    ] = float(
+        detect_cfg[
+            "nsigma"
+        ]
+    )
+
+    out[
+        "detectability_threshold_min_nsigma_points"
+    ] = int(
+        detect_cfg[
+            "min_nsigma_points"
+        ]
+    )
+
+    out[
+        "detectability_threshold_min_delta_chi2_per_point"
+    ] = float(
+        detect_cfg[
+            "min_delta_chi2_per_point"
+        ]
+    )
+
+    nearest_limit = detect_cfg[
+        "max_nearest_peak_distance_tE"
+    ]
+
+    out[
+        "detectability_threshold_max_nearest_dt_over_tE"
+    ] = (
+        np.nan
+        if nearest_limit is None
+        else float(nearest_limit)
+    )
+
+    if pyLIMA_model is None:
+        out[
+            "detectability_reasons"
+        ] = "no_model"
+
+        return out
+
+    if not isinstance(
+        event_data,
+        dict,
+    ):
+        out[
+            "detectability_reasons"
+        ] = "event_data_not_dict"
+
+        return out
+
+    try:
+        t0 = float(
+            event_data[
+                "t0"
+            ]
+        )
+
+        tE = abs(
+            float(
+                event_data[
+                    "tE"
+                ]
+            )
+        )
+
+    except Exception:
+        out[
+            "detectability_reasons"
+        ] = "invalid_t0_or_tE"
+
+        return out
+
+    if (
+        not np.isfinite(t0)
+        or not np.isfinite(tE)
+        or tE <= 0.0
+    ):
+        out[
+            "detectability_reasons"
+        ] = "invalid_t0_or_tE"
+
+        return out
+
+    all_times = []
+
+    total_chi2 = 0.0
+    total_nsigma = 0
+    total_max_snr = 0.0
+    n_bands = 0
+    n_obs = 0
+
+    for telescope in pyLIMA_model.event.telescopes:
+
+        band = str(
+            telescope.name
+        )
+
+        if not _prefit_selected_band(
+            band,
+            detect_cfg[
+                "bands"
+            ],
+        ):
+            continue
+
+        lc = getattr(
+            telescope,
+            "lightcurve",
+            None,
+        )
+
+        if lc is None or len(lc) == 0:
+            continue
+
+        colnames = list(
+            getattr(
+                lc,
+                "colnames",
+                [],
+            )
+        )
+
+        required = {
+            "time",
+            "mag_model",
+            "err_mag",
+        }
+
+        if not required.issubset(
+            set(colnames)
+        ):
+            continue
+
+        times = _prefit_plain_array(
+            lc[
+                "time"
+            ]
+        )
+
+        model_mag = _prefit_plain_array(
+            lc[
+                "mag_model"
+            ]
+        )
+
+        sigma_mag = _prefit_plain_array(
+            lc[
+                "err_mag"
+            ]
+        )
+
+        valid = (
+            np.isfinite(times)
+            & np.isfinite(model_mag)
+            & np.isfinite(sigma_mag)
+            & (sigma_mag > 0.0)
+        )
+
+        times = times[
+            valid
+        ]
+
+        model_mag = model_mag[
+            valid
+        ]
+
+        sigma_mag = sigma_mag[
+            valid
+        ]
+
+        n = int(
+            len(times)
+        )
+
+        if n == 0:
+            continue
+
+        weights = (
+            1.0
+            / sigma_mag**2
+        )
+
+        sum_w = float(
+            np.sum(weights)
+        )
+
+        if (
+            not np.isfinite(sum_w)
+            or sum_w <= 0.0
+        ):
+            continue
+
+        m0 = float(
+            np.sum(
+                weights
+                * model_mag
+            )
+            / sum_w
+        )
+
+        residual_sigma = (
+            model_mag
+            - m0
+        ) / sigma_mag
+
+        residual_sigma = np.asarray(
+            residual_sigma,
+            dtype=float,
+        )
+
+        chi2_band = float(
+            np.sum(
+                residual_sigma**2
+            )
+        )
+
+        abs_snr = np.abs(
+            residual_sigma
+        )
+
+        n_nsigma_band = int(
+            np.sum(
+                abs_snr
+                >= float(
+                    detect_cfg[
+                        "nsigma"
+                    ]
+                )
+            )
+        )
+
+        max_snr_band = float(
+            np.max(
+                abs_snr
+            )
+        )
+
+        n_bands += 1
+        n_obs += n
+
+        total_chi2 += (
+            chi2_band
+        )
+
+        total_nsigma += (
+            n_nsigma_band
+        )
+
+        total_max_snr = max(
+            total_max_snr,
+            max_snr_band,
+        )
+
+        all_times.append(
+            times
+        )
+
+        prefix = (
+            f"detectability_band_{band}"
+        )
+
+        out[
+            f"{prefix}_n"
+        ] = n
+
+        out[
+            f"{prefix}_constant_mag"
+        ] = m0
+
+        out[
+            f"{prefix}_delta_chi2_const"
+        ] = chi2_band
+
+        out[
+            f"{prefix}_n_nsigma"
+        ] = n_nsigma_band
+
+        out[
+            f"{prefix}_max_snr"
+        ] = max_snr_band
+
+    out[
+        "detectability_n_obs"
+    ] = int(
+        n_obs
+    )
+
+    out[
+        "detectability_n_bands"
+    ] = int(
+        n_bands
+    )
+
+    out[
+        "detectability_delta_chi2_const_asimov"
+    ] = float(
+        total_chi2
+    )
+
+    out[
+        "detectability_n_nsigma"
+    ] = int(
+        total_nsigma
+    )
+
+    out[
+        "detectability_max_snr"
+    ] = float(
+        total_max_snr
+    )
+
+    if n_obs > 0:
+
+        delta_per_point = (
+            total_chi2
+            / float(n_obs)
+        )
+
+        out[
+            "detectability_delta_chi2_per_point"
+        ] = float(
+            delta_per_point
+        )
+
+    else:
+
+        delta_per_point = np.nan
+
+    if all_times:
+
+        times_all = np.concatenate(
+            all_times
+        )
+
+        dt = (
+            times_all
+            - t0
+        )
+
+        peak_half_width = (
+            float(
+                detect_cfg[
+                    "peak_window_tE"
+                ]
+            )
+            * tE
+        )
+
+        peak = (
+            np.abs(dt)
+            <= peak_half_width
+        )
+
+        left = (
+            (dt < 0.0)
+            & (
+                dt
+                >= -peak_half_width
+            )
+        )
+
+        right = (
+            (dt > 0.0)
+            & (
+                dt
+                <= peak_half_width
+            )
+        )
+
+        n_peak = int(
+            np.sum(
+                peak
+            )
+        )
+
+        n_left = int(
+            np.sum(
+                left
+            )
+        )
+
+        n_right = int(
+            np.sum(
+                right
+            )
+        )
+
+        nearest = float(
+            np.min(
+                np.abs(
+                    dt
+                )
+            )
+            / tE
+        )
+
+    else:
+
+        n_peak = 0
+        n_left = 0
+        n_right = 0
+        nearest = np.nan
+
+    out[
+        "detectability_n_peak"
+    ] = n_peak
+
+    out[
+        "detectability_n_left_peak"
+    ] = n_left
+
+    out[
+        "detectability_n_right_peak"
+    ] = n_right
+
+    out[
+        "detectability_nearest_dt_over_tE"
+    ] = nearest
+
+    reasons = []
+
+    if (
+        n_obs
+        < detect_cfg[
+            "min_total_points"
+        ]
+    ):
+        reasons.append(
+            "min_total_points"
+        )
+
+    if (
+        n_bands
+        < detect_cfg[
+            "min_bands"
+        ]
+    ):
+        reasons.append(
+            "min_bands"
+        )
+
+    if (
+        n_peak
+        < detect_cfg[
+            "min_peak_points"
+        ]
+    ):
+        reasons.append(
+            "min_peak_points"
+        )
+
+    if (
+        n_left
+        < detect_cfg[
+            "min_left_peak_points"
+        ]
+    ):
+        reasons.append(
+            "min_left_peak_points"
+        )
+
+    if (
+        n_right
+        < detect_cfg[
+            "min_right_peak_points"
+        ]
+    ):
+        reasons.append(
+            "min_right_peak_points"
+        )
+
+    if (
+        total_nsigma
+        < detect_cfg[
+            "min_nsigma_points"
+        ]
+    ):
+        reasons.append(
+            "min_nsigma_points"
+        )
+
+    if (
+        not np.isfinite(
+            delta_per_point
+        )
+        or (
+            delta_per_point
+            < detect_cfg[
+                "min_delta_chi2_per_point"
+            ]
+        )
+    ):
+        reasons.append(
+            "min_delta_chi2_per_point"
+        )
+
+    if nearest_limit is not None:
+
+        if (
+            not np.isfinite(
+                nearest
+            )
+            or (
+                nearest
+                > float(
+                    nearest_limit
+                )
+            )
+        ):
+            reasons.append(
+                "max_nearest_peak_distance_tE"
+            )
+
+    out[
+        "detectability_pass"
+    ] = (
+        len(reasons)
+        == 0
+    )
+
+    out[
+        "detectability_reasons"
+    ] = ";".join(
+        reasons
+    )
+
+    return out
+
+
+def _prefit_force_failure(
+    metrics,
+    reason,
+):
+    reasons = [
+        item
+        for item in str(
+            metrics.get(
+                "detectability_reasons",
+                "",
+            )
+        ).split(";")
+        if item
+    ]
+
+    if reason not in reasons:
+        reasons.append(
+            str(reason)
+        )
+
+    metrics[
+        "detectability_pass"
+    ] = False
+
+    metrics[
+        "detectability_reasons"
+    ] = ";".join(
+        reasons
+    )
+
+    return metrics
+
+
+def _sim_event_with_prefit_detectability(
+    *args,
+    **kwargs,
+):
+    """
+    Runtime wrapper around functions_roman_rubin.sim_event.
+
+    When disabled:
+        exact historical behavior.
+
+    When enabled:
+        1. simulate reference event with old noisy detection disabled;
+        2. compute Asimov microlensing detectability;
+        3a. audit_only=True:
+                return decision=False, so no fitting occurs;
+        3b. audit_only=False:
+                simulate requested truth event and allow the fit only if
+                the prefit detectability criterion passed.
+    """
+
+    global _RUNTIME_LAST_DETECTABILITY
+
+    detect_cfg = (
+        _prefit_detectability_config()
+    )
+
+    _RUNTIME_LAST_DETECTABILITY = {
+        "detectability_enabled":
+            bool(
+                detect_cfg[
+                    "enabled"
+                ]
+            ),
+    }
+
+    if not detect_cfg[
+        "enabled"
+    ]:
+        return (
+            _ORIGINAL_SIM_EVENT_PREFIT_DETECTABILITY(
+                *args,
+                **kwargs,
+            )
+        )
+
+    import inspect as _inspect
+    import random as _random
+
+    signature = _inspect.signature(
+        _ORIGINAL_SIM_EVENT_PREFIT_DETECTABILITY
+    )
+
+    bound = signature.bind_partial(
+        *args,
+        **kwargs,
+    )
+
+    bound.apply_defaults()
+
+    call_args = dict(
+        bound.arguments
+    )
+
+    event_data = call_args.get(
+        "data",
+        None,
+    )
+
+    # We replace the historical noise-dependent detection criterion.
+    call_args[
+        "apply_detection_criteria"
+    ] = False
+
+    reference_mode = detect_cfg[
+        "reference_model"
+    ]
+
+    reference_args = dict(
+        call_args
+    )
+
+    if (
+        reference_mode
+        == "no_parallax"
+    ):
+        reference_args[
+            "truth_parallax"
+        ] = False
+
+    # ------------------------------------------------------------
+    # Reference simulation must not perturb the RNG state used by
+    # the actual H0/H1 simulation.
+    # ------------------------------------------------------------
+
+    np_state = np.random.get_state()
+
+    try:
+        py_state = _random.getstate()
+    except Exception:
+        py_state = None
+
+    try:
+
+        (
+            reference_model,
+            reference_parameters,
+            reference_valid_data,
+        ) = (
+            _ORIGINAL_SIM_EVENT_PREFIT_DETECTABILITY(
+                **reference_args
+            )
+        )
+
+    finally:
+
+        np.random.set_state(
+            np_state
+        )
+
+        if py_state is not None:
+            try:
+                _random.setstate(
+                    py_state
+                )
+            except Exception:
+                pass
+
+    metrics = (
+        _compute_prefit_detectability_metrics(
+            reference_model,
+            event_data,
+            detect_cfg,
+        )
+    )
+
+    metrics[
+        "detectability_reference_has_required_data"
+    ] = bool(
+        reference_valid_data
+    )
+
+    if not reference_valid_data:
+        metrics = _prefit_force_failure(
+            metrics,
+            "no_required_data",
+        )
+
+    _RUNTIME_LAST_DETECTABILITY = dict(
+        metrics
+    )
+
+    print("=" * 80)
+    print("[prefit detectability]")
+    print(
+        "reference_model =",
+        metrics.get(
+            "detectability_reference_model"
+        ),
+    )
+    print(
+        "Nobs =",
+        metrics.get(
+            "detectability_n_obs"
+        ),
+    )
+    print(
+        "Nbands =",
+        metrics.get(
+            "detectability_n_bands"
+        ),
+    )
+    print(
+        "Npeak =",
+        metrics.get(
+            "detectability_n_peak"
+        ),
+    )
+    print(
+        "Nleft/Nright =",
+        metrics.get(
+            "detectability_n_left_peak"
+        ),
+        metrics.get(
+            "detectability_n_right_peak"
+        ),
+    )
+    print(
+        "nearest |dt|/tE =",
+        metrics.get(
+            "detectability_nearest_dt_over_tE"
+        ),
+    )
+    print(
+        "Delta chi2 const Asimov =",
+        metrics.get(
+            "detectability_delta_chi2_const_asimov"
+        ),
+    )
+    print(
+        "Delta chi2 / Nobs =",
+        metrics.get(
+            "detectability_delta_chi2_per_point"
+        ),
+    )
+    print(
+        "N >= nsigma =",
+        metrics.get(
+            "detectability_n_nsigma"
+        ),
+    )
+    print(
+        "max SNR =",
+        metrics.get(
+            "detectability_max_snr"
+        ),
+    )
+    print(
+        "PASS =",
+        metrics.get(
+            "detectability_pass"
+        ),
+    )
+    print(
+        "reasons =",
+        metrics.get(
+            "detectability_reasons"
+        ),
+    )
+    print("=" * 80)
+
+    # ------------------------------------------------------------
+    # Audit mode: deliberately stop before any fit.
+    # ------------------------------------------------------------
+
+    if detect_cfg[
+        "audit_only"
+    ]:
+
+        return (
+            reference_model,
+            reference_parameters,
+            False,
+        )
+
+    # ------------------------------------------------------------
+    # Gate mode.
+    #
+    # If the reference IS the requested truth simulation, reuse it.
+    # Otherwise run the original requested H0/H1 truth simulation.
+    # ------------------------------------------------------------
+
+    if (
+        reference_mode
+        == "current_truth"
+    ):
+
+        actual_model = (
+            reference_model
+        )
+
+        actual_parameters = (
+            reference_parameters
+        )
+
+        actual_valid_data = bool(
+            reference_valid_data
+        )
+
+    else:
+
+        actual_args = dict(
+            call_args
+        )
+
+        (
+            actual_model,
+            actual_parameters,
+            actual_valid_data,
+        ) = (
+            _ORIGINAL_SIM_EVENT_PREFIT_DETECTABILITY(
+                **actual_args
+            )
+        )
+
+    final_decision = (
+        bool(
+            metrics[
+                "detectability_pass"
+            ]
+        )
+        and bool(
+            actual_valid_data
+        )
+    )
+
+    return (
+        actual_model,
+        actual_parameters,
+        final_decision,
+    )
+
+
+def install_prefit_detectability_runtime_patch():
+    global _ORIGINAL_SIM_EVENT_PREFIT_DETECTABILITY
+    global _PREFIT_DETECTABILITY_PATCH_INSTALLED
+
+    if (
+        _PREFIT_DETECTABILITY_PATCH_INSTALLED
+    ):
+        return
+
+    if not hasattr(
+        frr,
+        "sim_event",
+    ):
+        raise RuntimeError(
+            "functions_roman_rubin does not expose sim_event."
+        )
+
+    _ORIGINAL_SIM_EVENT_PREFIT_DETECTABILITY = (
+        frr.sim_event
+    )
+
+    frr.sim_event = (
+        _sim_event_with_prefit_detectability
+    )
+
+    _PREFIT_DETECTABILITY_PATCH_INSTALLED = True
+
+    detect_cfg = (
+        _prefit_detectability_config()
+    )
+
+    print(
+        "[prefit detectability patch] installed:",
+        detect_cfg,
+    )
+
+
 def install_runtime_patches():
     global _ORIGINAL_EXTRACT_LIGHTCURVES
     global _ORIGINAL_MODEL_CHOICE
@@ -2330,6 +3710,7 @@ def set_runtime_event_context(base_row):
 
 
 def clear_runtime_event_context():
+    global _RUNTIME_LAST_DETECTABILITY
     global _RUNTIME_BLEND_SOURCE_FRACTION
     global _RUNTIME_AVAILABLE_BANDS
     global _RUNTIME_FIT_WINDOW
@@ -2339,6 +3720,7 @@ def clear_runtime_event_context():
     _RUNTIME_AVAILABLE_BANDS = None
     _RUNTIME_FIT_WINDOW = None
     _RUNTIME_LAST_FIT_COUNTS = {}
+    _RUNTIME_LAST_DETECTABILITY = {}
 
 
 def init_worker(prepared_catalog, worker_config):
@@ -2356,6 +3738,8 @@ def init_worker(prepared_catalog, worker_config):
     )
 
     install_runtime_patches()
+    install_prefit_detectability_runtime_patch()
+    install_noise_realization_runtime_patch()
 
 
 # ============================================================================
@@ -3159,7 +4543,7 @@ def parallax_components_from_catalog(row):
     return float(piEN), float(piEE), diagnostics
 
 
-def build_tasks(prepared_catalog):
+def _build_tasks_single_realization_legacy(prepared_catalog):
     """Create exactly one task per catalog row."""
 
     tasks = []
@@ -3207,6 +4591,4277 @@ def build_tasks(prepared_catalog):
         tasks.append(task)
 
     return tasks
+
+
+# ============================================================================
+# NOISE_REALIZATION_RUNNER_PATCH_V2_RUNTIME
+#
+# Hidden-Parallax-only Monte Carlo over photometric noise realizations.
+#
+# The shared functions_roman_rubin.py source file is NOT modified.
+#
+# Scientific design
+# -----------------
+# For each physical catalog event:
+#
+#   - the original simulation_seed is kept fixed;
+#   - geometry/cadence/source/blending/etc. remain fixed;
+#   - only the photometric noise seed changes;
+#   - every noisy dataset is fit by H0 and H1 through the existing
+#     sim_fit_multi_fits machinery;
+#   - H0-truth uses piEN=piEE=0;
+#   - H1-truth uses the catalog piEN/piEE;
+#   - truth_parallax remains enabled in BOTH cases so that the truth-model
+#     code path is identical and the only physical difference is pi_E.
+#
+# paired_noise=True uses common random numbers:
+# H0 and H1 with the same realization_id receive the same standard-normal
+# random stream.
+# ============================================================================
+
+
+_RUNTIME_PHOTOMETRY_NOISE_SEED = None
+
+_ORIGINAL_APPLY_ROMAN_RUBIN_PHOTOMETRY = None
+
+_NOISE_RUNTIME_PATCH_INSTALLED = False
+
+
+
+# ============================================================================
+# H1_EMBEDDED_H0_INITIALIZATION_PATCH_V1
+#
+# Hidden-Parallax-only, opt-in initialization policy for calibrated LRT tests.
+#
+# If CONFIG["fit"]["h1_initialization"] == "embedded_H0", the alternative
+# H1 fit is initialized from the best-fit H0 physical parameters with
+# piEN=piEE=0.
+#
+# This makes the H1 initialization a function of the observed dataset rather
+# than of the truth case used by the Monte-Carlo generator.
+#
+# Shared functions_roman_rubin.py and fit_lc.py are NOT modified.
+# ============================================================================
+
+
+_ORIGINAL_RUN_MULTIPLE_NAMED_FITS_EMBEDDED_H0 = None
+_H1_EMBEDDED_H0_PATCH_INSTALLED = False
+
+
+def _h1_initialization_mode():
+    fit_cfg = CONFIG.get("fit", {})
+
+    if not isinstance(fit_cfg, dict):
+        return ""
+
+    return str(
+        fit_cfg.get(
+            "h1_initialization",
+            "",
+        )
+    ).strip().lower()
+
+
+def install_h1_embedded_h0_runtime_patch():
+    global _ORIGINAL_RUN_MULTIPLE_NAMED_FITS_EMBEDDED_H0
+    global _H1_EMBEDDED_H0_PATCH_INSTALLED
+
+    mode = _h1_initialization_mode()
+
+    if mode in {"", "none", "legacy", "truth"}:
+        return
+
+    if mode != "embedded_h0":
+        raise ValueError(
+            "fit.h1_initialization no reconocido: "
+            f"{mode!r}. "
+            "Opciones: legacy/none o embedded_H0."
+        )
+
+    if _H1_EMBEDDED_H0_PATCH_INSTALLED:
+        return
+
+    if not hasattr(
+        frr,
+        "run_multiple_named_fits",
+    ):
+        raise RuntimeError(
+            "functions_roman_rubin no expone "
+            "run_multiple_named_fits."
+        )
+
+    original = frr.run_multiple_named_fits
+
+    def run_multiple_named_fits_embedded_h0(
+        *args,
+        **kwargs,
+    ):
+        fit_specs = kwargs.get(
+            "fit_specs",
+            None,
+        )
+
+        existing_results = kwargs.get(
+            "existing_results",
+            None,
+        )
+
+        # Keep generic/legacy calls untouched.
+        if (
+            not isinstance(fit_specs, dict)
+            or not isinstance(existing_results, dict)
+        ):
+            return original(
+                *args,
+                **kwargs,
+            )
+
+        lrt_cfg = (
+            LRT_CONFIG
+            if isinstance(LRT_CONFIG, dict)
+            else {}
+        )
+
+        null_key = str(
+            lrt_cfg.get(
+                "null",
+                "H0",
+            )
+        )
+
+        alternative_key = str(
+            lrt_cfg.get(
+                "alternative",
+                "H1",
+            )
+        )
+
+        if alternative_key not in fit_specs:
+            return original(
+                *args,
+                **kwargs,
+            )
+
+        if null_key not in existing_results:
+            raise RuntimeError(
+                "embedded_H0 requested, but the null fit "
+                f"{null_key!r} is not available in existing_results. "
+                "The null model must be the primary fit."
+            )
+
+        h0_entry = existing_results[
+            null_key
+        ]
+
+        if not isinstance(h0_entry, dict):
+            raise RuntimeError(
+                "embedded_H0: invalid H0 result entry."
+            )
+
+        if str(
+            h0_entry.get(
+                "status",
+                "",
+            )
+        ) != "fitted":
+            raise RuntimeError(
+                "embedded_H0: H0 is not fitted successfully."
+            )
+
+        fit_rr = h0_entry.get(
+            "fit_rr",
+            None,
+        )
+
+        best_model = h0_entry.get(
+            "best_model",
+            None,
+        )
+
+        if fit_rr is None or best_model is None:
+            raise RuntimeError(
+                "embedded_H0: missing H0 fit_rr or best_model."
+            )
+
+        fit_results = getattr(
+            fit_rr,
+            "fit_results",
+            None,
+        )
+
+        if not isinstance(fit_results, dict):
+            raise RuntimeError(
+                "embedded_H0: H0 fit_results is unavailable."
+            )
+
+        h0_order = fit_results.get(
+            "initial_guess_parameter_order",
+            None,
+        )
+
+        if not isinstance(
+            h0_order,
+            (list, tuple),
+        ):
+            raise RuntimeError(
+                "embedded_H0: H0 physical parameter order "
+                "is unavailable."
+            )
+
+        best = np.asarray(
+            best_model,
+            dtype=float,
+        ).reshape(-1)
+
+        if len(best) < len(h0_order):
+            raise RuntimeError(
+                "embedded_H0: H0 best_model is shorter "
+                "than its physical parameter order."
+            )
+
+        h1_guess = {
+            str(name): float(best[k])
+            for k, name in enumerate(h0_order)
+        }
+
+        # Embed the null solution in the parallax model.
+        h1_guess["piEN"] = 0.0
+        h1_guess["piEE"] = 0.0
+
+        fit_specs_use = fit_specs.copy()
+
+        alternative_spec = dict(
+            fit_specs_use[
+                alternative_key
+            ]
+        )
+
+        if not bool(
+            alternative_spec.get(
+                "parallax",
+                False,
+            )
+        ):
+            raise RuntimeError(
+                "embedded_H0 requested but the alternative "
+                f"{alternative_key!r} is not a parallax fit."
+            )
+
+        alternative_spec[
+            "initial_guess"
+        ] = h1_guess
+
+        fit_specs_use[
+            alternative_key
+        ] = alternative_spec
+
+        kwargs_use = dict(
+            kwargs
+        )
+
+        kwargs_use[
+            "fit_specs"
+        ] = fit_specs_use
+
+        print(
+            "[embedded_H0] "
+            f"{alternative_key} initial guess from {null_key}: "
+            f"{h1_guess}",
+            flush=True,
+        )
+
+        return original(
+            *args,
+            **kwargs_use,
+        )
+
+    _ORIGINAL_RUN_MULTIPLE_NAMED_FITS_EMBEDDED_H0 = (
+        original
+    )
+
+    frr.run_multiple_named_fits = (
+        run_multiple_named_fits_embedded_h0
+    )
+
+    _H1_EMBEDDED_H0_PATCH_INSTALLED = True
+
+    print(
+        "[embedded_H0] runtime patch installed",
+        flush=True,
+    )
+
+
+# Install at module import time. With fork workers the patched module state is
+# inherited; with spawn/import workers the same configuration installs it again.
+install_h1_embedded_h0_runtime_patch()
+
+
+# ============================================================================
+# H1_FULL_EMBEDDED_H0_FLUX_PATCH_V1
+#
+# Optional extension of embedded_H0 initialization.
+#
+# pyLIMA normally recomputes telescope flux guesses from the physical model.
+# For an exact nested H0 -> H1 initialization, we instead reuse the flux
+# parameters from the fitted H0 solution.
+#
+# Enabled only with:
+#
+#     fit.h1_embed_fluxes_from_H0 = true
+#
+# Shared microlensing code and installed pyLIMA files are NOT modified.
+# ============================================================================
+
+
+_H1_EMBEDDED_H0_FLUX_CONTEXT = None
+
+_ORIGINAL_TRF_INITIAL_GUESS_EMBEDDED_H0 = None
+_ORIGINAL_RUN_MULTIPLE_NAMED_FITS_FULL_EMBEDDED_H0 = None
+
+_H1_FULL_EMBEDDED_H0_FLUX_PATCH_INSTALLED = False
+
+
+def _h1_embed_fluxes_from_h0_enabled():
+
+    fit_cfg = CONFIG.get("fit", {})
+
+    if not isinstance(fit_cfg, dict):
+        return False
+
+    return bool(
+        fit_cfg.get(
+            "h1_embed_fluxes_from_H0",
+            False,
+        )
+    )
+
+
+def install_h1_full_embedded_h0_flux_runtime_patch():
+
+    global _H1_EMBEDDED_H0_FLUX_CONTEXT
+    global _ORIGINAL_TRF_INITIAL_GUESS_EMBEDDED_H0
+    global _ORIGINAL_RUN_MULTIPLE_NAMED_FITS_FULL_EMBEDDED_H0
+    global _H1_FULL_EMBEDDED_H0_FLUX_PATCH_INSTALLED
+
+    if not _h1_embed_fluxes_from_h0_enabled():
+        return
+
+    if _h1_initialization_mode() != "embedded_h0":
+        raise ValueError(
+            "fit.h1_embed_fluxes_from_H0=true requires "
+            "fit.h1_initialization='embedded_H0'."
+        )
+
+    if _H1_FULL_EMBEDDED_H0_FLUX_PATCH_INSTALLED:
+        return
+
+    from pyLIMA.fits import TRF_fit
+
+    # ------------------------------------------------------------------
+    # Patch TRF.initial_guess so that, when the runtime H0-flux context
+    # is active, pyLIMA does NOT recompute telescope flux guesses.
+    # ------------------------------------------------------------------
+
+    original_initial_guess = TRF_fit.TRFfit.initial_guess
+
+    def initial_guess_with_embedded_h0_fluxes(self):
+
+        global _H1_EMBEDDED_H0_FLUX_CONTEXT
+
+        context = _H1_EMBEDDED_H0_FLUX_CONTEXT
+
+        if context is not None:
+
+            fluxes = [
+                float(x)
+                for x in context
+            ]
+
+            n_model = len(
+                self.model_parameters_guess
+            )
+
+            fit_keys = list(
+                self.fit_parameters.keys()
+            )
+
+            trailing_keys = fit_keys[
+                n_model:
+            ]
+
+            if len(fluxes) != len(trailing_keys):
+                raise RuntimeError(
+                    "embedded_H0_full: H0 flux-vector length "
+                    "does not match H1 telescope-flux parameter count: "
+                    f"{len(fluxes)} != {len(trailing_keys)}; "
+                    f"trailing H1 parameters={trailing_keys}"
+                )
+
+            allowed_flux_tokens = (
+                "fsource_",
+                "ftotal_",
+                "fblend_",
+                "gblend_",
+            )
+
+            non_flux = [
+                key
+                for key in trailing_keys
+                if not key.startswith(
+                    allowed_flux_tokens
+                )
+            ]
+
+            if non_flux:
+                raise RuntimeError(
+                    "embedded_H0_full expected only telescope flux "
+                    "parameters after physical parameters, but found: "
+                    f"{non_flux}"
+                )
+
+            # Validate that the H0 fitted fluxes lie inside the H1 bounds.
+            for key, value in zip(
+                trailing_keys,
+                fluxes,
+            ):
+
+                lo, hi = self.fit_parameters[
+                    key
+                ][1]
+
+                lo = float(lo)
+                hi = float(hi)
+
+                # Tiny numerical deviations at an active bound are clipped
+                # only at machine-precision scale.
+                scale = max(
+                    1.0,
+                    abs(lo),
+                    abs(hi),
+                    abs(value),
+                )
+
+                atol = 1e-10 * scale
+
+                if value < lo - atol or value > hi + atol:
+                    raise RuntimeError(
+                        "embedded_H0_full: fitted H0 flux is outside "
+                        f"H1 bounds for {key}: "
+                        f"value={value}, bounds=[{lo}, {hi}]"
+                    )
+
+                if value < lo:
+                    value = lo
+
+                if value > hi:
+                    value = hi
+
+            self.telescopes_fluxes_parameters_guess = fluxes
+
+            print(
+                "[embedded_H0_full] using H0 fitted telescope fluxes "
+                f"order={trailing_keys}, values={fluxes}",
+                flush=True,
+            )
+
+        full_guess = original_initial_guess(
+            self
+        )
+
+        if context is not None:
+
+            print(
+                "[embedded_H0_full] exact full TRF initial guess "
+                f"order={list(self.fit_parameters.keys())}, "
+                f"values={full_guess}",
+                flush=True,
+            )
+
+        return full_guess
+
+    TRF_fit.TRFfit.initial_guess = (
+        initial_guess_with_embedded_h0_fluxes
+    )
+
+    _ORIGINAL_TRF_INITIAL_GUESS_EMBEDDED_H0 = (
+        original_initial_guess
+    )
+
+    # ------------------------------------------------------------------
+    # The embedded-H0 physical wrapper is already installed.
+    # Wrap it once more so that the H0 fitted fluxes are exposed only
+    # while the alternative H1 fit is being executed.
+    # ------------------------------------------------------------------
+
+    original_multi = frr.run_multiple_named_fits
+
+    def run_multiple_named_fits_full_embedded_h0(
+        *args,
+        **kwargs,
+    ):
+
+        global _H1_EMBEDDED_H0_FLUX_CONTEXT
+
+        fit_specs = kwargs.get(
+            "fit_specs",
+            None,
+        )
+
+        existing_results = kwargs.get(
+            "existing_results",
+            None,
+        )
+
+        if (
+            not isinstance(fit_specs, dict)
+            or not isinstance(existing_results, dict)
+        ):
+            return original_multi(
+                *args,
+                **kwargs,
+            )
+
+        lrt_cfg = (
+            LRT_CONFIG
+            if isinstance(LRT_CONFIG, dict)
+            else {}
+        )
+
+        null_key = str(
+            lrt_cfg.get(
+                "null",
+                "H0",
+            )
+        )
+
+        alternative_key = str(
+            lrt_cfg.get(
+                "alternative",
+                "H1",
+            )
+        )
+
+        if (
+            null_key not in existing_results
+            or alternative_key not in fit_specs
+        ):
+            return original_multi(
+                *args,
+                **kwargs,
+            )
+
+        # The current calibrated-LRT implementation expects H0 to be
+        # already fitted and only H1 to remain.
+        missing_fit_keys = [
+            key
+            for key in fit_specs
+            if key not in existing_results
+        ]
+
+        if missing_fit_keys != [
+            alternative_key
+        ]:
+            raise RuntimeError(
+                "embedded_H0_full currently requires that the only "
+                "remaining fit is the LRT alternative. "
+                f"remaining={missing_fit_keys}"
+            )
+
+        h0_entry = existing_results[
+            null_key
+        ]
+
+        fit_rr = h0_entry.get(
+            "fit_rr",
+            None,
+        )
+
+        best_model = h0_entry.get(
+            "best_model",
+            None,
+        )
+
+        if fit_rr is None or best_model is None:
+            raise RuntimeError(
+                "embedded_H0_full: H0 fit result unavailable."
+            )
+
+        fit_results = getattr(
+            fit_rr,
+            "fit_results",
+            None,
+        )
+
+        if not isinstance(
+            fit_results,
+            dict,
+        ):
+            raise RuntimeError(
+                "embedded_H0_full: H0 fit_results unavailable."
+            )
+
+        h0_order = fit_results.get(
+            "initial_guess_parameter_order",
+            None,
+        )
+
+        if not isinstance(
+            h0_order,
+            (list, tuple),
+        ):
+            raise RuntimeError(
+                "embedded_H0_full: H0 physical parameter order "
+                "unavailable."
+            )
+
+        best = np.asarray(
+            best_model,
+            dtype=float,
+        ).reshape(-1)
+
+        n_phys_h0 = len(
+            h0_order
+        )
+
+        if len(best) <= n_phys_h0:
+            raise RuntimeError(
+                "embedded_H0_full: H0 best_model has no "
+                "telescope-flux parameters."
+            )
+
+        fluxes_h0 = [
+            float(x)
+            for x in best[
+                n_phys_h0:
+            ]
+        ]
+
+        if not np.all(
+            np.isfinite(fluxes_h0)
+        ):
+            raise RuntimeError(
+                "embedded_H0_full: non-finite H0 fitted fluxes."
+            )
+
+        print(
+            "[embedded_H0_full] H0 fitted flux vector "
+            f"values={fluxes_h0}",
+            flush=True,
+        )
+
+        if _H1_EMBEDDED_H0_FLUX_CONTEXT is not None:
+            raise RuntimeError(
+                "embedded_H0_full: stale runtime flux context."
+            )
+
+        _H1_EMBEDDED_H0_FLUX_CONTEXT = (
+            fluxes_h0
+        )
+
+        try:
+
+            return original_multi(
+                *args,
+                **kwargs,
+            )
+
+        finally:
+
+            _H1_EMBEDDED_H0_FLUX_CONTEXT = None
+
+    frr.run_multiple_named_fits = (
+        run_multiple_named_fits_full_embedded_h0
+    )
+
+    _ORIGINAL_RUN_MULTIPLE_NAMED_FITS_FULL_EMBEDDED_H0 = (
+        original_multi
+    )
+
+    _H1_FULL_EMBEDDED_H0_FLUX_PATCH_INSTALLED = True
+
+    print(
+        "[embedded_H0_full] runtime flux patch installed",
+        flush=True,
+    )
+
+
+install_h1_full_embedded_h0_flux_runtime_patch()
+
+
+# ============================================================================
+# H1_PARALLAX_GRID_MULTISTART_PATCH_V1
+#
+# Hidden-Parallax-only, opt-in deterministic multistart for the H1 parallax fit.
+#
+# Design:
+#
+#   - H0 is fitted once as usual.
+#   - All H1 starts use the H0 best-fit t0,u0,tE,rho.
+#   - A deterministic grid is explored in (piEN, piEE).
+#   - Grid points use pyLIMA's automatic telescope-flux initialization.
+#   - Optionally, an additional (0,0) candidate uses the EXACT fitted H0
+#     telescope fluxes ("center_full").
+#   - The H1 entry exposed to the normal LRT machinery is the candidate with
+#     minimum chi2.
+#
+# The same procedure is applied under H0-truth and H1-truth.
+#
+# Shared functions_roman_rubin.py, fit_lc.py and installed pyLIMA files are
+# NOT modified.
+# ============================================================================
+
+
+_H1_PARALLAX_GRID_MULTISTART_PATCH_INSTALLED = False
+_ORIGINAL_RUN_MULTIPLE_NAMED_FITS_H1_MULTISTART = None
+
+
+def _h1_multistart_config():
+
+    fit_cfg = CONFIG.get("fit", {})
+
+    if not isinstance(fit_cfg, dict):
+        return {}
+
+    cfg = fit_cfg.get(
+        "h1_multistart",
+        {},
+    )
+
+    if not isinstance(cfg, dict):
+        return {}
+
+    return cfg
+
+
+def _h1_multistart_enabled():
+
+    return bool(
+        _h1_multistart_config().get(
+            "enabled",
+            False,
+        )
+    )
+
+
+def _h1_multistart_bound_half_width(
+    bound_spec,
+    parameter_name,
+):
+
+    if isinstance(
+        bound_spec,
+        (list, tuple),
+    ):
+        if len(bound_spec) != 2:
+            raise ValueError(
+                f"{parameter_name} multistart bound must have length 2."
+            )
+
+        lo = float(bound_spec[0])
+        hi = float(bound_spec[1])
+
+    elif isinstance(
+        bound_spec,
+        dict,
+    ):
+
+        if "half_width" in bound_spec:
+
+            center = float(
+                bound_spec.get(
+                    "center",
+                    0.0,
+                )
+            )
+
+            half_width = float(
+                bound_spec["half_width"]
+            )
+
+            if abs(center) > 1.0e-12:
+                raise ValueError(
+                    f"{parameter_name} multistart requires bounds centered "
+                    f"on zero; center={center}."
+                )
+
+            if not np.isfinite(
+                half_width
+            ) or half_width <= 0:
+                raise ValueError(
+                    f"Invalid half_width for {parameter_name}: "
+                    f"{half_width}"
+                )
+
+            return half_width
+
+        if "bounds" in bound_spec:
+            bounds = bound_spec["bounds"]
+            if len(bounds) != 2:
+                raise ValueError(
+                    f"Invalid bounds for {parameter_name}: {bounds}"
+                )
+            lo = float(bounds[0])
+            hi = float(bounds[1])
+
+        elif (
+            "lower" in bound_spec
+            and "upper" in bound_spec
+        ):
+            lo = float(bound_spec["lower"])
+            hi = float(bound_spec["upper"])
+
+        else:
+            raise ValueError(
+                f"Cannot infer symmetric multistart bounds for "
+                f"{parameter_name}: {bound_spec}"
+            )
+
+    else:
+        raise TypeError(
+            f"Unsupported bound specification for {parameter_name}: "
+            f"{bound_spec!r}"
+        )
+
+    if (
+        not np.isfinite(lo)
+        or not np.isfinite(hi)
+        or lo >= hi
+    ):
+        raise ValueError(
+            f"Invalid bounds for {parameter_name}: [{lo}, {hi}]"
+        )
+
+    if not (
+        lo < 0.0 < hi
+    ):
+        raise ValueError(
+            f"{parameter_name} multistart bounds must contain zero: "
+            f"[{lo}, {hi}]"
+        )
+
+    scale = max(
+        1.0,
+        abs(lo),
+        abs(hi),
+    )
+
+    if abs(
+        abs(lo) - abs(hi)
+    ) > 1.0e-8 * scale:
+        raise ValueError(
+            f"{parameter_name} multistart requires symmetric zero-centered "
+            f"bounds; got [{lo}, {hi}]"
+        )
+
+    return 0.5 * (
+        hi - lo
+    )
+
+
+def _h1_multistart_float_or_none(value):
+
+    try:
+        value = float(value)
+    except Exception:
+        return None
+
+    if not np.isfinite(value):
+        return None
+
+    return value
+
+
+def _h1_multistart_entry_chi2(entry):
+
+    if not isinstance(
+        entry,
+        dict,
+    ):
+        return np.nan
+
+    fit_rr = entry.get(
+        "fit_rr",
+        None,
+    )
+
+    fit_results = getattr(
+        fit_rr,
+        "fit_results",
+        None,
+    )
+
+    if isinstance(
+        fit_results,
+        dict,
+    ):
+
+        for key in (
+            "chi2",
+            "chi2_photometry",
+        ):
+            value = _h1_multistart_float_or_none(
+                fit_results.get(
+                    key,
+                    None,
+                )
+            )
+
+            if value is not None:
+                return value
+
+    likelihood_stats = entry.get(
+        "likelihood_stats",
+        None,
+    )
+
+    if isinstance(
+        likelihood_stats,
+        dict,
+    ):
+        value = _h1_multistart_float_or_none(
+            likelihood_stats.get(
+                "chi2",
+                None,
+            )
+        )
+
+        if value is not None:
+            return value
+
+    return np.nan
+
+
+def _h1_multistart_optimizer_record(
+    entry,
+):
+
+    record = {}
+
+    fit_rr = None
+
+    if isinstance(
+        entry,
+        dict,
+    ):
+        fit_rr = entry.get(
+            "fit_rr",
+            None,
+        )
+
+    fit_results = getattr(
+        fit_rr,
+        "fit_results",
+        None,
+    )
+
+    if not isinstance(
+        fit_results,
+        dict,
+    ):
+        return record
+
+    for key in (
+        "optimizer_status",
+        "optimizer_success",
+        "optimizer_message",
+        "optimizer_nfev",
+        "optimizer_njev",
+        "optimizer_optimality",
+        "optimizer_n_active_bounds",
+        "optimizer_active_mask",
+    ):
+
+        value = fit_results.get(
+            key,
+            None,
+        )
+
+        if isinstance(
+            value,
+            np.ndarray,
+        ):
+            value = value.tolist()
+
+        elif isinstance(
+            value,
+            np.generic,
+        ):
+            value = value.item()
+
+        record[key] = value
+
+    return record
+
+
+def install_h1_parallax_grid_multistart_runtime_patch():
+
+    global _H1_PARALLAX_GRID_MULTISTART_PATCH_INSTALLED
+    global _ORIGINAL_RUN_MULTIPLE_NAMED_FITS_H1_MULTISTART
+    global _H1_EMBEDDED_H0_FLUX_CONTEXT
+
+    if not _h1_multistart_enabled():
+        return
+
+    if _H1_PARALLAX_GRID_MULTISTART_PATCH_INSTALLED:
+        return
+
+    if _h1_initialization_mode() != "embedded_h0":
+        raise ValueError(
+            "H1 multistart currently requires "
+            "fit.h1_initialization='embedded_H0'."
+        )
+
+    if not _h1_embed_fluxes_from_h0_enabled():
+        raise ValueError(
+            "H1 multistart currently requires "
+            "fit.h1_embed_fluxes_from_H0=true so that the exact "
+            "nested center_full candidate is available."
+        )
+
+    if _ORIGINAL_RUN_MULTIPLE_NAMED_FITS_EMBEDDED_H0 is None:
+        raise RuntimeError(
+            "Cannot install H1 multistart: original "
+            "run_multiple_named_fits handle is unavailable."
+        )
+
+    # Current binding includes the already validated embedded-H0 wrappers.
+    # Generic calls continue through it.
+    current_multi = frr.run_multiple_named_fits
+
+    # For individual grid candidates we intentionally call the ORIGINAL shared
+    # function.  Otherwise the embedded-H0 wrapper would overwrite every
+    # non-zero piE grid start back to piEN=piEE=0.
+    base_multi = (
+        _ORIGINAL_RUN_MULTIPLE_NAMED_FITS_EMBEDDED_H0
+    )
+
+    def run_multiple_named_fits_h1_multistart(
+        *args,
+        **kwargs,
+    ):
+
+        global _H1_EMBEDDED_H0_FLUX_CONTEXT
+
+        fit_specs = kwargs.get(
+            "fit_specs",
+            None,
+        )
+
+        existing_results = kwargs.get(
+            "existing_results",
+            None,
+        )
+
+        if (
+            not isinstance(fit_specs, dict)
+            or not isinstance(existing_results, dict)
+        ):
+            return current_multi(
+                *args,
+                **kwargs,
+            )
+
+        lrt_cfg = (
+            LRT_CONFIG
+            if isinstance(LRT_CONFIG, dict)
+            else {}
+        )
+
+        null_key = str(
+            lrt_cfg.get(
+                "null",
+                "H0",
+            )
+        )
+
+        alternative_key = str(
+            lrt_cfg.get(
+                "alternative",
+                "H1",
+            )
+        )
+
+        if (
+            null_key not in existing_results
+            or alternative_key not in fit_specs
+        ):
+            return current_multi(
+                *args,
+                **kwargs,
+            )
+
+        missing_fit_keys = [
+            key
+            for key in fit_specs
+            if key not in existing_results
+        ]
+
+        if missing_fit_keys != [
+            alternative_key
+        ]:
+            raise RuntimeError(
+                "H1 multistart requires the null H0 to be the primary "
+                "already-fitted model and H1 to be the only remaining fit. "
+                f"remaining={missing_fit_keys}"
+            )
+
+        h0_entry = existing_results[
+            null_key
+        ]
+
+        if str(
+            h0_entry.get(
+                "status",
+                "",
+            )
+        ) != "fitted":
+            raise RuntimeError(
+                "H1 multistart: H0 is not fitted."
+            )
+
+        h0_fit_rr = h0_entry.get(
+            "fit_rr",
+            None,
+        )
+
+        h0_best_model = h0_entry.get(
+            "best_model",
+            None,
+        )
+
+        if (
+            h0_fit_rr is None
+            or h0_best_model is None
+        ):
+            raise RuntimeError(
+                "H1 multistart: missing H0 fit object/best_model."
+            )
+
+        h0_fit_results = getattr(
+            h0_fit_rr,
+            "fit_results",
+            None,
+        )
+
+        if not isinstance(
+            h0_fit_results,
+            dict,
+        ):
+            raise RuntimeError(
+                "H1 multistart: H0 fit_results unavailable."
+            )
+
+        h0_order = h0_fit_results.get(
+            "initial_guess_parameter_order",
+            None,
+        )
+
+        if not isinstance(
+            h0_order,
+            (list, tuple),
+        ):
+            raise RuntimeError(
+                "H1 multistart: H0 physical parameter order unavailable."
+            )
+
+        h0_best = np.asarray(
+            h0_best_model,
+            dtype=float,
+        ).reshape(-1)
+
+        n_h0_phys = len(
+            h0_order
+        )
+
+        if _bounded_flux_profile_enabled():
+
+            if len(
+                h0_best
+            ) != n_h0_phys:
+                raise RuntimeError(
+                    "H1 multistart/profile: expected H0 best_model "
+                    "to contain physical parameters only. "
+                    f"len(best_model)={len(h0_best)}, "
+                    f"n_physical={n_h0_phys}"
+                )
+
+        elif len(
+            h0_best
+        ) <= n_h0_phys:
+            raise RuntimeError(
+                "H1 multistart: H0 best_model has no fitted fluxes."
+            )
+
+        h0_physical_guess = {
+            str(name): float(
+                h0_best[k]
+            )
+            for k, name in enumerate(
+                h0_order
+            )
+        }
+
+        for required in (
+            "t0",
+            "u0",
+            "tE",
+            "rho",
+        ):
+            if required not in h0_physical_guess:
+                raise RuntimeError(
+                    "H1 multistart expected FSPL H0 parameters "
+                    f"including {required!r}. "
+                    f"Available={list(h0_physical_guess)}"
+                )
+
+        # BOUNDED_FLUX_PROFILE_FIX_V2
+        # In reduced/profile mode H0 best_model contains only
+        # the physical nonlinear parameters. No explicit flux
+        # vector exists or is needed.
+        if _bounded_flux_profile_enabled():
+
+            h0_fluxes = []
+
+        else:
+
+            h0_fluxes = [
+                float(x)
+                for x in h0_best[
+                    n_h0_phys:
+                ]
+            ]
+
+            if not np.all(
+                np.isfinite(
+                    h0_fluxes
+                )
+            ):
+                raise RuntimeError(
+                    "H1 multistart: non-finite H0 fitted fluxes."
+                )
+
+        h0_chi2 = _h1_multistart_entry_chi2(
+            h0_entry
+        )
+
+        if not np.isfinite(
+            h0_chi2
+        ):
+            raise RuntimeError(
+                "H1 multistart: H0 chi2 unavailable."
+            )
+
+        alternative_spec = dict(
+            fit_specs[
+                alternative_key
+            ]
+        )
+
+        if not bool(
+            alternative_spec.get(
+                "parallax",
+                False,
+            )
+        ):
+            raise RuntimeError(
+                "H1 multistart requires a parallax alternative."
+            )
+
+        alt_bounds = alternative_spec.get(
+            "bounds",
+            None,
+        )
+
+        if not isinstance(
+            alt_bounds,
+            dict,
+        ):
+            raise RuntimeError(
+                "H1 multistart requires explicit H1 bounds."
+            )
+
+        if (
+            "piEN" not in alt_bounds
+            or "piEE" not in alt_bounds
+        ):
+            raise RuntimeError(
+                "H1 multistart requires explicit piEN/piEE bounds."
+            )
+
+        width_n = _h1_multistart_bound_half_width(
+            alt_bounds["piEN"],
+            "piEN",
+        )
+
+        width_e = _h1_multistart_bound_half_width(
+            alt_bounds["piEE"],
+            "piEE",
+        )
+
+        ms_cfg = _h1_multistart_config()
+
+        fractions = ms_cfg.get(
+            "piE_grid_fractions",
+            [-0.5, 0.0, 0.5],
+        )
+
+        if not isinstance(
+            fractions,
+            (list, tuple),
+        ):
+            raise TypeError(
+                "fit.h1_multistart.piE_grid_fractions must be a list."
+            )
+
+        fractions = [
+            float(x)
+            for x in fractions
+        ]
+
+        if len(
+            fractions
+        ) == 0:
+            raise ValueError(
+                "H1 multistart grid cannot be empty."
+            )
+
+        if not np.all(
+            np.isfinite(
+                fractions
+            )
+        ):
+            raise ValueError(
+                "Non-finite H1 multistart grid fraction."
+            )
+
+        for fraction in fractions:
+            if abs(
+                fraction
+            ) > 1.0:
+                raise ValueError(
+                    "H1 multistart grid fractions must satisfy |f|<=1."
+                )
+
+        include_auto_center = bool(
+            ms_cfg.get(
+                "include_auto_center",
+                True,
+            )
+        )
+
+        include_exact_center = bool(
+            ms_cfg.get(
+                "include_exact_H0_center",
+                True,
+            )
+        )
+
+        # ------------------------------------------------------------
+        # Build deterministic candidate list.
+        # ------------------------------------------------------------
+
+        candidates = []
+
+        if include_exact_center:
+
+            candidates.append(
+                {
+                    "id": "center_full",
+                    "piEN": 0.0,
+                    "piEE": 0.0,
+                    "flux_mode": "H0_exact",
+                }
+            )
+
+        for frac_n in fractions:
+
+            for frac_e in fractions:
+
+                if (
+                    frac_n == 0.0
+                    and frac_e == 0.0
+                    and not include_auto_center
+                ):
+                    continue
+
+                candidates.append(
+                    {
+                        "id": (
+                            "grid_"
+                            f"N{frac_n:+.3f}_"
+                            f"E{frac_e:+.3f}_auto"
+                        )
+                        .replace(
+                            "+",
+                            "p",
+                        )
+                        .replace(
+                            "-",
+                            "m",
+                        )
+                        .replace(
+                            ".",
+                            "p",
+                        ),
+                        "piEN": float(
+                            frac_n
+                            * width_n
+                        ),
+                        "piEE": float(
+                            frac_e
+                            * width_e
+                        ),
+                        "flux_mode": "auto",
+                    }
+                )
+
+        if len(
+            candidates
+        ) == 0:
+            raise RuntimeError(
+                "H1 multistart produced zero candidates."
+            )
+
+        path_to_save_fit = kwargs.get(
+            "path_to_save_fit",
+            None,
+        )
+
+        if path_to_save_fit is None:
+            raise RuntimeError(
+                "H1 multistart requires keyword path_to_save_fit."
+            )
+
+        base_fit_path = Path(
+            path_to_save_fit
+        )
+
+        multistart_root = (
+            base_fit_path
+            / "_H1_multistart"
+        )
+
+        multistart_root.mkdir(
+            parents=True,
+            exist_ok=True,
+        )
+
+        candidate_records = []
+
+        # H1_TOPK_DIAGNOSTIC_POLISH_PATCH_V1
+        # Keep successful coarse entries so selected ranks can be
+        # independently polished for basin/globality diagnostics.
+        successful_candidate_entries = []
+
+        best_entry = None
+        best_chi2 = np.inf
+        best_candidate = None
+        best_candidate_dir = None
+
+        print(
+            "[H1_multistart] "
+            f"N_candidates={len(candidates)}, "
+            f"piEN_half_width={width_n}, "
+            f"piEE_half_width={width_e}, "
+            f"fractions={fractions}",
+            flush=True,
+        )
+
+        # ------------------------------------------------------------
+        # Run all H1 candidates on the SAME lc_to_fit.
+        # ------------------------------------------------------------
+
+        for candidate_index, candidate in enumerate(
+            candidates
+        ):
+
+            start_guess = dict(
+                h0_physical_guess
+            )
+
+            start_guess[
+                "piEN"
+            ] = float(
+                candidate["piEN"]
+            )
+
+            start_guess[
+                "piEE"
+            ] = float(
+                candidate["piEE"]
+            )
+
+            spec = dict(
+                alternative_spec
+            )
+
+            spec[
+                "initial_guess"
+            ] = start_guess
+
+            fit_specs_one = {
+                alternative_key: spec
+            }
+
+            candidate_dir = (
+                multistart_root
+                / (
+                    f"{candidate_index:02d}_"
+                    f"{candidate['id']}"
+                )
+            )
+
+            candidate_dir.mkdir(
+                parents=True,
+                exist_ok=True,
+            )
+
+            kwargs_one = dict(
+                kwargs
+            )
+
+            kwargs_one[
+                "fit_specs"
+            ] = fit_specs_one
+
+            kwargs_one[
+                "existing_results"
+            ] = existing_results
+
+            kwargs_one[
+                "path_to_save_fit"
+            ] = str(
+                candidate_dir
+            )
+
+            if _H1_EMBEDDED_H0_FLUX_CONTEXT is not None:
+                raise RuntimeError(
+                    "H1 multistart found stale H0-flux context."
+                )
+
+            if candidate[
+                "flux_mode"
+            ] == "H0_exact":
+
+                _H1_EMBEDDED_H0_FLUX_CONTEXT = list(
+                    h0_fluxes
+                )
+
+            print(
+                "[H1_multistart] START "
+                f"{candidate_index:02d} "
+                f"id={candidate['id']} "
+                f"piEN={candidate['piEN']:.16g} "
+                f"piEE={candidate['piEE']:.16g} "
+                f"flux_mode={candidate['flux_mode']}",
+                flush=True,
+            )
+
+            try:
+
+                candidate_result = base_multi(
+                    *args,
+                    **kwargs_one,
+                )
+
+            finally:
+
+                _H1_EMBEDDED_H0_FLUX_CONTEXT = None
+
+            entry = candidate_result.get(
+                alternative_key,
+                None,
+            )
+
+            status = None
+
+            if isinstance(
+                entry,
+                dict,
+            ):
+                status = entry.get(
+                    "status",
+                    None,
+                )
+
+            chi2 = _h1_multistart_entry_chi2(
+                entry
+            )
+
+            optimizer_record = (
+                _h1_multistart_optimizer_record(
+                    entry
+                )
+            )
+
+            record = {
+                "index": int(
+                    candidate_index
+                ),
+                "id": str(
+                    candidate["id"]
+                ),
+                "piEN": float(
+                    candidate["piEN"]
+                ),
+                "piEE": float(
+                    candidate["piEE"]
+                ),
+                "flux_mode": str(
+                    candidate["flux_mode"]
+                ),
+                "status": (
+                    None
+                    if status is None
+                    else str(status)
+                ),
+                "chi2": (
+                    None
+                    if not np.isfinite(
+                        chi2
+                    )
+                    else float(
+                        chi2
+                    )
+                ),
+            }
+
+            record.update(
+                optimizer_record
+            )
+
+            # H1_MULTISTART_SAVE_FINAL_PIE_V1
+            # Save the final fitted parallax, not only the grid start.
+            if isinstance(entry, dict):
+
+                candidate_fit_rr = entry.get(
+                    "fit_rr",
+                    None,
+                )
+
+                candidate_fit_results = getattr(
+                    candidate_fit_rr,
+                    "fit_results",
+                    None,
+                )
+
+                if isinstance(
+                    candidate_fit_results,
+                    dict,
+                ):
+
+                    candidate_best = candidate_fit_results.get(
+                        "best_model",
+                        None,
+                    )
+
+                    candidate_order = candidate_fit_results.get(
+                        "initial_guess_parameter_order",
+                        None,
+                    )
+
+                    if (
+                        candidate_best is not None
+                        and isinstance(
+                            candidate_order,
+                            (list, tuple),
+                        )
+                    ):
+
+                        candidate_best = np.asarray(
+                            candidate_best,
+                            dtype=float,
+                        ).reshape(-1)
+
+                        for parallax_name in (
+                            "piEN",
+                            "piEE",
+                        ):
+
+                            if parallax_name in candidate_order:
+
+                                parallax_index = list(
+                                    candidate_order
+                                ).index(
+                                    parallax_name
+                                )
+
+                                if parallax_index < len(
+                                    candidate_best
+                                ):
+
+                                    record[
+                                        "best_" + parallax_name
+                                    ] = float(
+                                        candidate_best[
+                                            parallax_index
+                                        ]
+                                    )
+
+            candidate_records.append(
+                record
+            )
+
+            if (
+                status == "fitted"
+                and np.isfinite(chi2)
+            ):
+                successful_candidate_entries.append({
+                    "index": int(candidate_index),
+                    "chi2": float(chi2),
+                    "candidate": dict(candidate),
+                    "entry": entry,
+                })
+
+            print(
+                "[H1_multistart] END "
+                f"{candidate_index:02d} "
+                f"id={candidate['id']} "
+                f"status={status} "
+                f"chi2={chi2} "
+                f"optimality={optimizer_record.get('optimizer_optimality')}",
+                flush=True,
+            )
+
+            if (
+                status == "fitted"
+                and np.isfinite(
+                    chi2
+                )
+                and chi2 < best_chi2
+            ):
+
+                best_chi2 = float(
+                    chi2
+                )
+
+                best_entry = entry
+                best_candidate = dict(
+                    candidate
+                )
+                best_candidate[
+                    "index"
+                ] = int(
+                    candidate_index
+                )
+
+                best_candidate_dir = (
+                    candidate_dir
+                )
+
+        if (
+            best_entry is None
+            or best_candidate is None
+        ):
+            raise RuntimeError(
+                "H1 multistart: no successful finite H1 candidate."
+            )
+
+        # ============================================================
+        # H1_GLOBAL_DE_DIAGNOSTIC_PATCH_V1
+        #
+        # Optional diagnostic global search:
+        #
+        #   pyLIMA Differential Evolution (6D physical H1)
+        #       -> exact bounded flux profiling at every evaluation
+        #       -> strict TRF polish from DE best point
+        #
+        # Diagnostic only: this DOES NOT replace the normal H1 result.
+        # ============================================================
+
+        de_cfg = (
+            ms_cfg.get(
+                "diagnostic_global_de",
+                {},
+            )
+            or {}
+        )
+
+        de_enabled = bool(
+            de_cfg.get(
+                "enabled",
+                False,
+            )
+        )
+
+        if de_enabled:
+
+            if not _bounded_flux_profile_enabled():
+                raise RuntimeError(
+                    "Global DE diagnostic requires "
+                    "HIDDEN_PARALLAX_BOUNDED_PROFILE=1."
+                )
+
+            from pyLIMA.fits import DE_fit as _DE_fit_local
+
+            de_population_size = int(
+                de_cfg.get(
+                    "population_size",
+                    10,
+                )
+            )
+
+            de_max_iteration = int(
+                de_cfg.get(
+                    "max_iteration",
+                    1500,
+                )
+            )
+
+            # H1_GLOBAL_DE_STRICT_STOPPING_FIX_V4
+            #
+            # pyLIMA 1.9.8 hardcodes scipy DE with atol=1,
+            # which is far too loose for this likelihood problem.
+            de_atol = float(
+                de_cfg.get(
+                    "atol",
+                    1.0e-4,
+                )
+            )
+
+            de_tol = float(
+                de_cfg.get(
+                    "tol",
+                    0.0,
+                )
+            )
+
+            if (
+                not np.isfinite(de_atol)
+                or de_atol < 0.0
+            ):
+                raise ValueError(
+                    f"Invalid DE atol={de_atol}"
+                )
+
+            if (
+                not np.isfinite(de_tol)
+                or de_tol < 0.0
+            ):
+                raise ValueError(
+                    f"Invalid DE tol={de_tol}"
+                )
+
+            de_strategy = str(
+                de_cfg.get(
+                    "strategy",
+                    "rand1bin",
+                )
+            )
+
+            de_seeds = de_cfg.get(
+                "seeds",
+                [20260903],
+            )
+
+            if not isinstance(
+                de_seeds,
+                (list, tuple),
+            ):
+                de_seeds = [
+                    de_seeds
+                ]
+
+            de_seeds = [
+                int(x)
+                for x in de_seeds
+            ]
+
+            if len(de_seeds) == 0:
+                raise ValueError(
+                    "diagnostic_global_de.seeds cannot be empty."
+                )
+
+            if de_population_size <= 0:
+                raise ValueError(
+                    "diagnostic_global_de.population_size "
+                    "must be > 0."
+                )
+
+            if de_max_iteration <= 0:
+                raise ValueError(
+                    "diagnostic_global_de.max_iteration "
+                    "must be > 0."
+                )
+
+            de_polish_options = {
+                "xtol": 1.0e-10,
+                "ftol": 1.0e-10,
+                "gtol": 1.0e-8,
+                "max_nfev": 50000,
+                "x_scale": "jac",
+            }
+
+            user_de_polish_options = (
+                de_cfg.get(
+                    "trf_polish_optimizer_options",
+                    None,
+                )
+            )
+
+            if user_de_polish_options is not None:
+
+                if not isinstance(
+                    user_de_polish_options,
+                    dict,
+                ):
+                    raise TypeError(
+                        "diagnostic_global_de."
+                        "trf_polish_optimizer_options "
+                        "must be a dict."
+                    )
+
+                de_polish_options.update(
+                    user_de_polish_options
+                )
+
+            reference_fit_rr = (
+                best_entry.get(
+                    "fit_rr",
+                    None,
+                )
+            )
+
+            if reference_fit_rr is None:
+                raise RuntimeError(
+                    "Global DE diagnostic could not recover "
+                    "reference H1 fit object."
+                )
+
+            de_model = getattr(
+                reference_fit_rr,
+                "model",
+                None,
+            )
+
+            if de_model is None:
+                raise RuntimeError(
+                    "Global DE diagnostic could not recover "
+                    "H1 pyLIMA model."
+                )
+
+            de_root = (
+                base_fit_path
+                / "_H1_global_DE"
+            )
+
+            de_root.mkdir(
+                parents=True,
+                exist_ok=True,
+            )
+
+            print(
+                "[H1_global_DE] "
+                f"enabled=True "
+                f"population_size={de_population_size} "
+                f"max_iteration={de_max_iteration} "
+                f"strategy={de_strategy} "
+                f"seeds={de_seeds}",
+                flush=True,
+            )
+
+            for de_seed in de_seeds:
+
+                seed_dir = (
+                    de_root
+                    / f"seed_{de_seed}"
+                )
+
+                seed_dir.mkdir(
+                    parents=True,
+                    exist_ok=True,
+                )
+
+                # -----------------------------------------------
+                # Build a fresh DE fitter.
+                # polyfit removes telescope fluxes from the
+                # nonlinear vector. Our runtime derive-flux patch
+                # replaces pyLIMA's unbounded polyfit with the
+                # exact bounded profile.
+                # -----------------------------------------------
+
+                de_fit = _DE_fit_local.DEfit(
+                    de_model,
+                    telescopes_fluxes_method="polyfit",
+                    loss_function="chi2",
+                    DE_population_size=de_population_size,
+                    max_iteration=de_max_iteration,
+                    display_progress=False,
+                    strategy=de_strategy,
+                )
+
+                # H1_GLOBAL_DE_MATCH_H1_BOUNDS_FIX_V3
+                #
+                # DEfit initializes with pyLIMA's standard model bounds.
+                # For this diagnostic we MUST use exactly the same resolved
+                # physical H1 domain as the TRF fits used by the LRT.
+                #
+                # reference_fit_rr is the already-created bounded-profile
+                # H1 TRF fitter. Its fit_parameters therefore already contain
+                # the final numerical bounds after fit_lc.apply_fit_bounds()
+                # and apply_custom_bounds().
+                #
+                reference_fit_parameters = getattr(
+                    reference_fit_rr,
+                    "fit_parameters",
+                    None,
+                )
+
+                if not isinstance(
+                    reference_fit_parameters,
+                    dict,
+                ):
+                    raise RuntimeError(
+                        "Global DE could not recover reference H1 "
+                        "fit_parameters."
+                    )
+
+                de_order = list(
+                    de_fit.fit_parameters.keys()
+                )
+
+                reference_order = list(
+                    reference_fit_parameters.keys()
+                )
+
+                if de_order != reference_order:
+                    raise RuntimeError(
+                        "Global DE/reference H1 parameter-order mismatch: "
+                        f"DE={de_order}, reference={reference_order}"
+                    )
+
+                de_resolved_bounds = {}
+
+                for parameter_name in de_order:
+
+                    reference_interval = (
+                        reference_fit_parameters[
+                            parameter_name
+                        ][1]
+                    )
+
+                    lo = float(
+                        reference_interval[0]
+                    )
+
+                    hi = float(
+                        reference_interval[1]
+                    )
+
+                    if (
+                        not np.isfinite(lo)
+                        or not np.isfinite(hi)
+                        or lo >= hi
+                    ):
+                        raise RuntimeError(
+                            "Invalid reference H1 bounds for "
+                            f"{parameter_name}: {reference_interval}"
+                        )
+
+                    # Exact same numerical interval used by H1 TRF.
+                    de_fit.fit_parameters[
+                        parameter_name
+                    ][1] = [
+                        lo,
+                        hi,
+                    ]
+
+                    # Keep prior metadata consistent too. For chi2 the
+                    # priors do not enter the objective, but there is no
+                    # reason to leave contradictory physical bounds here.
+                    if (
+                        isinstance(
+                            de_fit.priors_parameters,
+                            dict,
+                        )
+                        and parameter_name
+                        in de_fit.priors_parameters
+                    ):
+                        de_fit.priors_parameters[
+                            parameter_name
+                        ][1] = [
+                            lo,
+                            hi,
+                        ]
+
+                    de_resolved_bounds[
+                        parameter_name
+                    ] = [
+                        lo,
+                        hi,
+                    ]
+
+                print(
+                    "[H1_global_DE] MATCHED_H1_BOUNDS "
+                    f"{de_resolved_bounds}",
+                    flush=True,
+                )
+
+                required_de = {
+                    "t0",
+                    "u0",
+                    "tE",
+                    "rho",
+                    "piEN",
+                    "piEE",
+                }
+
+                if (
+                    len(de_order) != 6
+                    or set(de_order) != required_de
+                ):
+                    raise RuntimeError(
+                        "Global DE expected exactly the 6 "
+                        "physical H1 parameters, got "
+                        f"{de_order}"
+                    )
+
+                print(
+                    "[H1_global_DE] START "
+                    f"seed={de_seed} "
+                    f"order={de_order}",
+                    flush=True,
+                )
+
+                # scipy differential_evolution in this pyLIMA
+                # version does not expose an RNG argument through
+                # DEfit. Make the diagnostic deterministic while
+                # restoring NumPy global state afterwards.
+                np_state = np.random.get_state()
+
+                # pyLIMA DEfit.fit() hardcodes:
+                #
+                #     tol=0.0
+                #     atol=1
+                #
+                # Temporarily wrap scipy DE so the diagnostic can use
+                # a scientifically meaningful stopping criterion.
+                original_scipy_de = (
+                    _DE_fit_local.scipy.optimize.differential_evolution
+                )
+
+                def strict_scipy_de(*de_args, **de_kwargs):
+
+                    de_kwargs["atol"] = float(
+                        de_atol
+                    )
+
+                    de_kwargs["tol"] = float(
+                        de_tol
+                    )
+
+                    return original_scipy_de(
+                        *de_args,
+                        **de_kwargs,
+                    )
+
+                _DE_fit_local.scipy.optimize.differential_evolution = (
+                    strict_scipy_de
+                )
+
+                try:
+
+                    np.random.seed(
+                        int(de_seed)
+                    )
+
+                    de_fit.fit()
+
+                finally:
+
+                    _DE_fit_local.scipy.optimize.differential_evolution = (
+                        original_scipy_de
+                    )
+
+                    np.random.set_state(
+                        np_state
+                    )
+
+                de_results = getattr(
+                    de_fit,
+                    "fit_results",
+                    None,
+                )
+
+                if not isinstance(
+                    de_results,
+                    dict,
+                ):
+                    raise RuntimeError(
+                        "Global DE returned no fit_results."
+                    )
+
+                # H1_GLOBAL_DE_DIAGNOSTIC_FIX_V2
+                #
+                # In pyLIMA 1.9.8 DEfit.fit_results["best_model"]
+                # is reconstructed from trials_parameters. With profiled
+                # telescope fluxes, that record may contain the physical
+                # DE coordinates plus derived flux parameters.
+                #
+                # The authoritative nonlinear optimizer vector is instead
+                # scipy.optimize.differential_evolution result.x.
+                #
+                de_fit_object = de_results.get(
+                    "fit_object",
+                    None,
+                )
+
+                if de_fit_object is None:
+                    raise RuntimeError(
+                        "Global DE returned no fit_object."
+                    )
+
+                de_x = getattr(
+                    de_fit_object,
+                    "x",
+                    None,
+                )
+
+                if (
+                    de_x is None
+                    and isinstance(
+                        de_fit_object,
+                        dict,
+                    )
+                ):
+                    de_x = de_fit_object.get(
+                        "x",
+                        None,
+                    )
+
+                if de_x is None:
+                    raise RuntimeError(
+                        "Global DE fit_object contains no optimizer x."
+                    )
+
+                de_best = np.asarray(
+                    de_x,
+                    dtype=float,
+                ).reshape(-1)
+
+                if len(de_best) != len(de_order):
+                    raise RuntimeError(
+                        "Global DE optimizer x length "
+                        f"is {len(de_best)}, "
+                        f"expected {len(de_order)} "
+                        f"for order={de_order}."
+                    )
+
+                if len(de_best) != 6:
+                    raise RuntimeError(
+                        "Global DE expected 6 physical H1 "
+                        f"parameters but optimizer x has {len(de_best)}."
+                    )
+
+                raw_best_model_value = de_results.get(
+                    "best_model",
+                    None,
+                )
+
+                if raw_best_model_value is None:
+                    de_best_raw = np.asarray(
+                        [],
+                        dtype=float,
+                    )
+                else:
+                    de_best_raw = np.asarray(
+                        raw_best_model_value,
+                        dtype=float,
+                    ).reshape(-1)
+
+                de_chi2 = float(
+                    de_results.get(
+                        "chi2",
+                        np.nan,
+                    )
+                )
+
+                de_time = float(
+                    de_results.get(
+                        "fit_time",
+                        np.nan,
+                    )
+                )
+
+                if not np.isfinite(
+                    de_chi2
+                ):
+                    raise RuntimeError(
+                        "Global DE returned non-finite chi2."
+                    )
+
+                de_guess = {
+                    str(name): float(de_best[k])
+                    for k, name in enumerate(
+                        de_order
+                    )
+                }
+
+                compact_de = {
+                    "seed": int(de_seed),
+                    "parameter_order": list(
+                        de_order
+                    ),
+                    # Physical coordinates actually optimized by DE.
+                    "best_model": np.asarray(
+                        de_best,
+                        dtype=float,
+                    ),
+                    "optimizer_x": np.asarray(
+                        de_best,
+                        dtype=float,
+                    ),
+
+                    # Keep pyLIMA's reconstructed record for diagnosis.
+                    "pyLIMA_best_model_raw": np.asarray(
+                        de_best_raw,
+                        dtype=float,
+                    ),
+                    "pyLIMA_best_model_raw_length": int(
+                        len(de_best_raw)
+                    ),
+
+                    "chi2": float(
+                        de_chi2
+                    ),
+                    "fit_time": float(
+                        de_time
+                    ),
+                    "population_size": int(
+                        de_population_size
+                    ),
+                    "max_iteration": int(
+                        de_max_iteration
+                    ),
+                    "atol": float(
+                        de_atol
+                    ),
+                    "tol": float(
+                        de_tol
+                    ),
+                    "nit": int(
+                        de_fit_object.get(
+                            "nit",
+                            -1,
+                        )
+                    ),
+                    "nfev": int(
+                        de_fit_object.get(
+                            "nfev",
+                            -1,
+                        )
+                    ),
+                    "success": bool(
+                        de_fit_object.get(
+                            "success",
+                            False,
+                        )
+                    ),
+                    "message": str(
+                        de_fit_object.get(
+                            "message",
+                            "",
+                        )
+                    ),
+                    "population_energy_std": float(
+                        np.std(
+                            np.asarray(
+                                de_fit_object.get(
+                                    "population_energies",
+                                    [],
+                                ),
+                                dtype=float,
+                            )
+                        )
+                    ),
+                    "strategy": str(
+                        de_strategy
+                    ),
+                    "fit_parameters": {
+                        str(k): v
+                        for k, v in
+                        de_fit.fit_parameters.items()
+                    },
+                    "resolved_H1_bounds": {
+                        str(k): list(v)
+                        for k, v in
+                        de_resolved_bounds.items()
+                    },
+                }
+
+                np.save(
+                    seed_dir / "de_raw.npy",
+                    compact_de,
+                    allow_pickle=True,
+                )
+
+                print(
+                    "[H1_global_DE] RAW_END "
+                    f"seed={de_seed} "
+                    f"chi2={de_chi2:.16g} "
+                    f"fit_time={de_time}",
+                    flush=True,
+                )
+
+                # -----------------------------------------------
+                # Strict TRF polish from DE global solution.
+                # -----------------------------------------------
+
+                de_polish_spec = dict(
+                    alternative_spec
+                )
+
+                de_polish_spec[
+                    "initial_guess"
+                ] = de_guess
+
+                de_polish_dir = (
+                    seed_dir
+                    / "trf_polish"
+                )
+
+                de_polish_dir.mkdir(
+                    parents=True,
+                    exist_ok=True,
+                )
+
+                kwargs_de_polish = dict(
+                    kwargs
+                )
+
+                kwargs_de_polish[
+                    "fit_specs"
+                ] = {
+                    alternative_key:
+                        de_polish_spec
+                }
+
+                kwargs_de_polish[
+                    "existing_results"
+                ] = existing_results
+
+                kwargs_de_polish[
+                    "path_to_save_fit"
+                ] = str(
+                    de_polish_dir
+                )
+
+                kwargs_de_polish[
+                    "optimizer_options"
+                ] = dict(
+                    de_polish_options
+                )
+
+                if (
+                    _H1_EMBEDDED_H0_FLUX_CONTEXT
+                    is not None
+                ):
+                    raise RuntimeError(
+                        "Global DE diagnostic found stale "
+                        "embedded-flux context."
+                    )
+
+                print(
+                    "[H1_global_DE] TRF_START "
+                    f"seed={de_seed} "
+                    f"DE_chi2={de_chi2:.16g}",
+                    flush=True,
+                )
+
+                try:
+
+                    de_polish_results = base_multi(
+                        *args,
+                        **kwargs_de_polish,
+                    )
+
+                finally:
+
+                    _H1_EMBEDDED_H0_FLUX_CONTEXT = None
+
+                de_polish_entry = (
+                    de_polish_results.get(
+                        alternative_key,
+                        None,
+                    )
+                )
+
+                de_polish_chi2 = (
+                    _h1_multistart_entry_chi2(
+                        de_polish_entry
+                    )
+                )
+
+                de_polish_optimizer = (
+                    _h1_multistart_optimizer_record(
+                        de_polish_entry
+                    )
+                )
+
+                print(
+                    "[H1_global_DE] TRF_END "
+                    f"seed={de_seed} "
+                    f"chi2={de_polish_chi2} "
+                    f"improvement="
+                    f"{de_chi2 - de_polish_chi2 if np.isfinite(de_polish_chi2) else np.nan} "
+                    f"nfev="
+                    f"{de_polish_optimizer.get('optimizer_nfev')} "
+                    f"optimality="
+                    f"{de_polish_optimizer.get('optimizer_optimality')}",
+                    flush=True,
+                )
+
+        # ============================================================
+        # H1_TOPK_DIAGNOSTIC_POLISH_PATCH_V1
+        #
+        # Optional diagnostic only:
+        #
+        #   coarse candidates
+        #       -> sort by chi2
+        #       -> polish the best K independently
+        #
+        # These fits are written below _H1_multistart but DO NOT
+        # replace the normal H1 final result.  This lets us test
+        # basin/globality without changing production behavior.
+        # ============================================================
+
+        diagnostic_top_k = int(
+            ms_cfg.get(
+                "diagnostic_polish_top_k",
+                0,
+            )
+        )
+
+        if diagnostic_top_k < 0:
+            raise ValueError(
+                "h1_multistart.diagnostic_polish_top_k "
+                "must be >= 0."
+            )
+
+        if diagnostic_top_k > 0:
+
+            if not _bounded_flux_profile_enabled():
+                raise RuntimeError(
+                    "Top-K diagnostic polish is currently intended "
+                    "for bounded-profile mode only."
+                )
+
+            ranked_entries = sorted(
+                successful_candidate_entries,
+                key=lambda item: item["chi2"],
+            )
+
+            diagnostic_top_k = min(
+                diagnostic_top_k,
+                len(ranked_entries),
+            )
+
+            topk_options = {
+                "xtol": 1.0e-10,
+                "ftol": 1.0e-10,
+                "gtol": 1.0e-8,
+                "max_nfev": 50000,
+                "x_scale": "jac",
+            }
+
+            user_topk_options = ms_cfg.get(
+                "diagnostic_topk_polish_optimizer_options",
+                None,
+            )
+
+            if user_topk_options is not None:
+
+                if not isinstance(
+                    user_topk_options,
+                    dict,
+                ):
+                    raise TypeError(
+                        "diagnostic_topk_polish_optimizer_options "
+                        "must be a dict."
+                    )
+
+                topk_options.update(
+                    user_topk_options
+                )
+
+            print(
+                "[H1_topk_polish] "
+                f"enabled=True "
+                f"K={diagnostic_top_k} "
+                f"optimizer_options={topk_options}",
+                flush=True,
+            )
+
+            for rank_index, ranked in enumerate(
+                ranked_entries[:diagnostic_top_k],
+                start=1,
+            ):
+
+                source_entry = ranked["entry"]
+                source_candidate = ranked["candidate"]
+
+                source_fit_rr = source_entry.get(
+                    "fit_rr",
+                    None,
+                )
+
+                source_fit_results = getattr(
+                    source_fit_rr,
+                    "fit_results",
+                    None,
+                )
+
+                if not isinstance(
+                    source_fit_results,
+                    dict,
+                ):
+                    raise RuntimeError(
+                        "Top-K polish: source fit_results unavailable."
+                    )
+
+                source_best = source_entry.get(
+                    "best_model",
+                    None,
+                )
+
+                if source_best is None:
+                    source_best = source_fit_results.get(
+                        "best_model",
+                        None,
+                    )
+
+                source_order = source_fit_results.get(
+                    "initial_guess_parameter_order",
+                    None,
+                )
+
+                if (
+                    source_best is None
+                    or not isinstance(
+                        source_order,
+                        (list, tuple),
+                    )
+                ):
+                    raise RuntimeError(
+                        "Top-K polish: source best_model/order "
+                        "unavailable."
+                    )
+
+                source_best = np.asarray(
+                    source_best,
+                    dtype=float,
+                ).reshape(-1)
+
+                n_phys_topk = len(
+                    source_order
+                )
+
+                if len(source_best) != n_phys_topk:
+                    raise RuntimeError(
+                        "Top-K profile polish expected physical-only "
+                        f"best_model length {n_phys_topk}, "
+                        f"got {len(source_best)}."
+                    )
+
+                topk_initial_guess = {
+                    str(name): float(source_best[k])
+                    for k, name in enumerate(source_order)
+                }
+
+                for required in (
+                    "t0",
+                    "u0",
+                    "tE",
+                    "rho",
+                    "piEN",
+                    "piEE",
+                ):
+                    if required not in topk_initial_guess:
+                        raise RuntimeError(
+                            "Top-K polish missing physical parameter "
+                            f"{required!r}; order={source_order}"
+                        )
+
+                topk_spec = dict(
+                    alternative_spec
+                )
+
+                topk_spec[
+                    "initial_guess"
+                ] = topk_initial_guess
+
+                topk_dir = (
+                    multistart_root
+                    / (
+                        f"polish_topk_rank{rank_index:02d}_"
+                        f"{source_candidate['id']}"
+                    )
+                )
+
+                topk_dir.mkdir(
+                    parents=True,
+                    exist_ok=True,
+                )
+
+                kwargs_topk = dict(
+                    kwargs
+                )
+
+                kwargs_topk[
+                    "fit_specs"
+                ] = {
+                    alternative_key: topk_spec
+                }
+
+                kwargs_topk[
+                    "existing_results"
+                ] = existing_results
+
+                kwargs_topk[
+                    "path_to_save_fit"
+                ] = str(
+                    topk_dir
+                )
+
+                kwargs_topk[
+                    "optimizer_options"
+                ] = dict(
+                    topk_options
+                )
+
+                if _H1_EMBEDDED_H0_FLUX_CONTEXT is not None:
+                    raise RuntimeError(
+                        "Top-K polish found stale flux context."
+                    )
+
+                print(
+                    "[H1_topk_polish] START "
+                    f"rank={rank_index} "
+                    f"source={source_candidate['id']} "
+                    f"coarse_chi2={ranked['chi2']:.16g} "
+                    f"piEN0={topk_initial_guess['piEN']:.16g} "
+                    f"piEE0={topk_initial_guess['piEE']:.16g}",
+                    flush=True,
+                )
+
+                try:
+
+                    topk_results = base_multi(
+                        *args,
+                        **kwargs_topk,
+                    )
+
+                finally:
+
+                    _H1_EMBEDDED_H0_FLUX_CONTEXT = None
+
+                topk_entry = topk_results.get(
+                    alternative_key,
+                    None,
+                )
+
+                topk_chi2 = _h1_multistart_entry_chi2(
+                    topk_entry
+                )
+
+                topk_optimizer = (
+                    _h1_multistart_optimizer_record(
+                        topk_entry
+                    )
+                )
+
+                print(
+                    "[H1_topk_polish] END "
+                    f"rank={rank_index} "
+                    f"source={source_candidate['id']} "
+                    f"chi2={topk_chi2} "
+                    f"improvement="
+                    f"{ranked['chi2'] - topk_chi2 if np.isfinite(topk_chi2) else np.nan} "
+                    f"nfev={topk_optimizer.get('optimizer_nfev')} "
+                    f"optimality="
+                    f"{topk_optimizer.get('optimizer_optimality')}",
+                    flush=True,
+                )
+
+        # ============================================================
+        # H1_MULTISTART_WINNER_POLISH_V1
+        #
+        # Re-run TRF from the COMPLETE best multistart solution:
+        # physical H1 parameters + fitted telescope fluxes.
+        #
+        # This is a numerical refinement only.  The final H1 result is
+        # min(grid winner, polished winner), so polishing cannot degrade H1.
+        # ============================================================
+
+        polish_record = {
+            "enabled": False,
+            "attempted": False,
+            "accepted": False,
+        }
+
+        # H1_ADAPTIVE_PROFILE_POLISH_PATCH_V1
+        #
+        # polish_winner accepts:
+        #
+        #   False       -> never polish
+        #   True        -> always polish
+        #   "adaptive"  -> polish only when the coarse winner has
+        #                  suspicious optimizer optimality.
+        #
+        # Missing/non-finite optimality is treated conservatively:
+        # the winner is polished.
+        polish_setting = ms_cfg.get(
+            "polish_winner",
+            False,
+        )
+
+        if isinstance(
+            polish_setting,
+            str,
+        ):
+
+            polish_mode = (
+                polish_setting
+                .strip()
+                .lower()
+            )
+
+            if polish_mode in (
+                "adaptive",
+            ):
+                polish_mode = "adaptive"
+
+            elif polish_mode in (
+                "always",
+                "true",
+                "yes",
+                "on",
+            ):
+                polish_mode = "always"
+
+            elif polish_mode in (
+                "never",
+                "false",
+                "no",
+                "off",
+            ):
+                polish_mode = "never"
+
+            else:
+                raise ValueError(
+                    "h1_multistart.polish_winner must be "
+                    "False, True, or 'adaptive'; "
+                    f"got {polish_setting!r}."
+                )
+
+        else:
+
+            polish_mode = (
+                "always"
+                if bool(polish_setting)
+                else "never"
+            )
+
+        polish_threshold = float(
+            ms_cfg.get(
+                "polish_optimality_threshold",
+                0.05,
+            )
+        )
+
+        if (
+            not np.isfinite(
+                polish_threshold
+            )
+            or polish_threshold < 0.0
+        ):
+            raise ValueError(
+                "h1_multistart.polish_optimality_threshold "
+                "must be finite and >= 0."
+            )
+
+        coarse_winner_optimizer = (
+            _h1_multistart_optimizer_record(
+                best_entry
+            )
+        )
+
+        coarse_opt_raw = (
+            coarse_winner_optimizer.get(
+                "optimizer_optimality",
+                None,
+            )
+        )
+
+        try:
+            coarse_optimality = float(
+                coarse_opt_raw
+            )
+        except (
+            TypeError,
+            ValueError,
+        ):
+            coarse_optimality = np.nan
+
+        if polish_mode == "always":
+
+            polish_enabled = True
+            polish_reason = "always"
+
+        elif polish_mode == "never":
+
+            polish_enabled = False
+            polish_reason = "disabled"
+
+        else:
+
+            if not np.isfinite(
+                coarse_optimality
+            ):
+
+                polish_enabled = True
+                polish_reason = (
+                    "nonfinite_coarse_optimality"
+                )
+
+            elif (
+                coarse_optimality
+                > polish_threshold
+            ):
+
+                polish_enabled = True
+                polish_reason = (
+                    "coarse_optimality_above_threshold"
+                )
+
+            else:
+
+                polish_enabled = False
+                polish_reason = (
+                    "coarse_optimality_below_threshold"
+                )
+
+        polish_record.update({
+            "policy_mode": str(
+                polish_mode
+            ),
+            "optimality_threshold": (
+                float(polish_threshold)
+                if polish_mode == "adaptive"
+                else None
+            ),
+            "coarse_winner_optimality": (
+                None
+                if not np.isfinite(
+                    coarse_optimality
+                )
+                else float(
+                    coarse_optimality
+                )
+            ),
+            "triggered": bool(
+                polish_enabled
+            ),
+            "trigger_reason": str(
+                polish_reason
+            ),
+        })
+
+        if (
+            polish_mode == "adaptive"
+            and not polish_enabled
+        ):
+
+            print(
+                "[H1_polish] SKIP "
+                f"mode=adaptive "
+                f"coarse_optimality={coarse_optimality} "
+                f"threshold={polish_threshold} "
+                f"reason={polish_reason}",
+                flush=True,
+            )
+
+        if polish_enabled:
+
+            polish_record["enabled"] = True
+            polish_record["attempted"] = True
+
+            winner_fit_rr = best_entry.get(
+                "fit_rr",
+                None,
+            )
+
+            winner_fit_results = getattr(
+                winner_fit_rr,
+                "fit_results",
+                None,
+            )
+
+            winner_best = best_entry.get(
+                "best_model",
+                None,
+            )
+
+            if (
+                not isinstance(winner_fit_results, dict)
+                or winner_best is None
+            ):
+                raise RuntimeError(
+                    "H1 polish: winning fit result/best_model unavailable."
+                )
+
+            winner_order = winner_fit_results.get(
+                "initial_guess_parameter_order",
+                None,
+            )
+
+            if not isinstance(
+                winner_order,
+                (list, tuple),
+            ):
+                raise RuntimeError(
+                    "H1 polish: physical parameter order unavailable."
+                )
+
+            winner_best = np.asarray(
+                winner_best,
+                dtype=float,
+            ).reshape(-1)
+
+            n_phys = len(
+                winner_order
+            )
+
+            # H1_PROFILE_POLISH_6D_PATCH_V1
+            #
+            # Legacy explicit-flux mode:
+            #     best_model = physical parameters + telescope fluxes
+            #
+            # Bounded-profile mode:
+            #     best_model = physical parameters only
+            #
+            # In profile mode the telescope fluxes must NOT be injected
+            # into the polish. They are re-profiled at every residual
+            # evaluation by the bounded-flux runtime patch.
+            profile_polish = _bounded_flux_profile_enabled()
+
+            if profile_polish:
+
+                if len(winner_best) != n_phys:
+                    raise RuntimeError(
+                        "H1 profile polish: expected physical-only "
+                        f"best_model length {n_phys}, got "
+                        f"{len(winner_best)}."
+                    )
+
+            else:
+
+                if len(winner_best) <= n_phys:
+                    raise RuntimeError(
+                        "H1 polish: winning best_model has no "
+                        "flux parameters."
+                    )
+
+            polish_physical_guess = {
+                str(name): float(winner_best[k])
+                for k, name in enumerate(winner_order)
+            }
+
+            for required in (
+                "t0",
+                "u0",
+                "tE",
+                "rho",
+                "piEN",
+                "piEE",
+            ):
+                if required not in polish_physical_guess:
+                    raise RuntimeError(
+                        "H1 polish missing physical parameter "
+                        f"{required!r}; order={winner_order}"
+                    )
+
+            if profile_polish:
+
+                polish_fluxes = []
+
+            else:
+
+                polish_fluxes = [
+                    float(x)
+                    for x in winner_best[n_phys:]
+                ]
+
+                if not np.all(
+                    np.isfinite(polish_fluxes)
+                ):
+                    raise RuntimeError(
+                        "H1 polish: non-finite winner flux vector."
+                    )
+
+            polish_options_default = {
+                "xtol": 1.0e-12,
+                "ftol": 1.0e-12,
+                "gtol": 1.0e-8,
+                "max_nfev": 50000,
+                "x_scale": "jac",
+            }
+
+            polish_options = dict(
+                polish_options_default
+            )
+
+            user_polish_options = ms_cfg.get(
+                "polish_optimizer_options",
+                None,
+            )
+
+            if user_polish_options is not None:
+
+                if not isinstance(
+                    user_polish_options,
+                    dict,
+                ):
+                    raise TypeError(
+                        "h1_multistart.polish_optimizer_options "
+                        "must be a dict."
+                    )
+
+                polish_options.update(
+                    user_polish_options
+                )
+
+            polish_spec = dict(
+                alternative_spec
+            )
+
+            polish_spec[
+                "initial_guess"
+            ] = polish_physical_guess
+
+            polish_dir = (
+                multistart_root
+                / "polish_winner"
+            )
+
+            polish_dir.mkdir(
+                parents=True,
+                exist_ok=True,
+            )
+
+            kwargs_polish = dict(
+                kwargs
+            )
+
+            kwargs_polish[
+                "fit_specs"
+            ] = {
+                alternative_key: polish_spec
+            }
+
+            kwargs_polish[
+                "existing_results"
+            ] = existing_results
+
+            kwargs_polish[
+                "path_to_save_fit"
+            ] = str(
+                polish_dir
+            )
+
+            kwargs_polish[
+                "optimizer_options"
+            ] = polish_options
+
+            if _H1_EMBEDDED_H0_FLUX_CONTEXT is not None:
+                raise RuntimeError(
+                    "H1 polish found stale flux context."
+                )
+
+            if profile_polish:
+
+                # Fluxes remain implicit/profiled.
+                _H1_EMBEDDED_H0_FLUX_CONTEXT = None
+
+            else:
+
+                _H1_EMBEDDED_H0_FLUX_CONTEXT = list(
+                    polish_fluxes
+                )
+
+            chi2_before_polish = float(
+                best_chi2
+            )
+
+            print(
+                "[H1_polish] START "
+                f"from={best_candidate['id']} "
+                f"chi2_before={chi2_before_polish:.16g} "
+                f"piEN0={polish_physical_guess['piEN']:.16g} "
+                f"piEE0={polish_physical_guess['piEE']:.16g} "
+                f"profile_mode={profile_polish} "
+                f"optimizer_options={polish_options}",
+                flush=True,
+            )
+
+            try:
+
+                polish_results = base_multi(
+                    *args,
+                    **kwargs_polish,
+                )
+
+            finally:
+
+                _H1_EMBEDDED_H0_FLUX_CONTEXT = None
+
+            polish_entry = polish_results.get(
+                alternative_key,
+                None,
+            )
+
+            polish_status = None
+
+            if isinstance(
+                polish_entry,
+                dict,
+            ):
+                polish_status = polish_entry.get(
+                    "status",
+                    None,
+                )
+
+            polish_chi2 = _h1_multistart_entry_chi2(
+                polish_entry
+            )
+
+            polish_optimizer = (
+                _h1_multistart_optimizer_record(
+                    polish_entry
+                )
+            )
+
+            polish_record.update({
+                "source_candidate_id": str(
+                    best_candidate["id"]
+                ),
+                "chi2_before": float(
+                    chi2_before_polish
+                ),
+                "chi2_after": (
+                    None
+                    if not np.isfinite(polish_chi2)
+                    else float(polish_chi2)
+                ),
+                "improvement": (
+                    None
+                    if not np.isfinite(polish_chi2)
+                    else float(
+                        chi2_before_polish
+                        - polish_chi2
+                    )
+                ),
+                "status": (
+                    None
+                    if polish_status is None
+                    else str(polish_status)
+                ),
+                "start_piEN": float(
+                    polish_physical_guess["piEN"]
+                ),
+                "start_piEE": float(
+                    polish_physical_guess["piEE"]
+                ),
+                "optimizer_options": dict(
+                    polish_options
+                ),
+            })
+
+            polish_record.update(
+                polish_optimizer
+            )
+
+            # Save the final polished physical parameters.
+            if isinstance(
+                polish_entry,
+                dict,
+            ):
+
+                polish_best = polish_entry.get(
+                    "best_model",
+                    None,
+                )
+
+                polish_fit_rr = polish_entry.get(
+                    "fit_rr",
+                    None,
+                )
+
+                polish_fit_results = getattr(
+                    polish_fit_rr,
+                    "fit_results",
+                    None,
+                )
+
+                polish_order = None
+
+                if isinstance(
+                    polish_fit_results,
+                    dict,
+                ):
+                    polish_order = polish_fit_results.get(
+                        "initial_guess_parameter_order",
+                        None,
+                    )
+
+                if (
+                    polish_best is not None
+                    and isinstance(
+                        polish_order,
+                        (list, tuple),
+                    )
+                ):
+
+                    polish_best = np.asarray(
+                        polish_best,
+                        dtype=float,
+                    ).reshape(-1)
+
+                    for parallax_name in (
+                        "piEN",
+                        "piEE",
+                    ):
+
+                        if parallax_name in polish_order:
+
+                            j = list(
+                                polish_order
+                            ).index(
+                                parallax_name
+                            )
+
+                            if j < len(
+                                polish_best
+                            ):
+                                polish_record[
+                                    "final_" + parallax_name
+                                ] = float(
+                                    polish_best[j]
+                                )
+
+            # Accept only a strictly better finite fitted solution.
+            if (
+                polish_status == "fitted"
+                and np.isfinite(polish_chi2)
+                and polish_chi2 < best_chi2
+            ):
+
+                best_chi2 = float(
+                    polish_chi2
+                )
+
+                best_entry = polish_entry
+                best_candidate_dir = polish_dir
+
+                polish_record[
+                    "accepted"
+                ] = True
+
+            print(
+                "[H1_polish] END "
+                f"status={polish_status} "
+                f"chi2_before={chi2_before_polish:.16g} "
+                f"chi2_after={polish_chi2} "
+                f"improvement="
+                f"{polish_record.get('improvement')} "
+                f"accepted={polish_record['accepted']} "
+                f"optimality="
+                f"{polish_optimizer.get('optimizer_optimality')}",
+                flush=True,
+            )
+
+        nested_tolerance = float(
+            ms_cfg.get(
+                "nested_chi2_tolerance",
+                1.0e-6,
+            )
+        )
+
+        if (
+            best_chi2
+            > h0_chi2
+            + nested_tolerance
+        ):
+            raise RuntimeError(
+                "H1 multistart failed nested-model sanity check: "
+                f"best_H1_chi2={best_chi2}, "
+                f"H0_chi2={h0_chi2}, "
+                f"tolerance={nested_tolerance}"
+            )
+
+        multistart_metadata = {
+            "version": "H1_PARALLAX_GRID_MULTISTART_PATCH_V1",
+            "n_candidates": int(
+                len(candidates)
+            ),
+            "grid_fractions": [
+                float(x)
+                for x in fractions
+            ],
+            "piEN_half_width": float(
+                width_n
+            ),
+            "piEE_half_width": float(
+                width_e
+            ),
+            "include_auto_center": bool(
+                include_auto_center
+            ),
+            "include_exact_H0_center": bool(
+                include_exact_center
+            ),
+            "h0_chi2": float(
+                h0_chi2
+            ),
+            "selected_index": int(
+                best_candidate["index"]
+            ),
+            "selected_id": str(
+                best_candidate["id"]
+            ),
+            "selected_piEN": float(
+                best_candidate["piEN"]
+            ),
+            "selected_piEE": float(
+                best_candidate["piEE"]
+            ),
+            "selected_flux_mode": str(
+                best_candidate["flux_mode"]
+            ),
+            "selected_chi2": float(
+                best_chi2
+            ),
+            "lrt_T_selected": float(
+                h0_chi2
+                - best_chi2
+            ),
+            "candidates": candidate_records,
+            "polish": polish_record,
+        }
+
+        # ------------------------------------------------------------
+        # Add metadata to the in-memory winning fit.
+        # ------------------------------------------------------------
+
+        best_entry = dict(
+            best_entry
+        )
+
+        best_entry[
+            "h1_multistart"
+        ] = multistart_metadata
+
+        best_entry[
+            "h1_multistart_n"
+        ] = int(
+            len(candidates)
+        )
+
+        best_entry[
+            "h1_multistart_selected"
+        ] = str(
+            best_candidate["id"]
+        )
+
+        best_entry[
+            "h1_multistart_selected_piEN"
+        ] = float(
+            best_candidate["piEN"]
+        )
+
+        best_entry[
+            "h1_multistart_selected_piEE"
+        ] = float(
+            best_candidate["piEE"]
+        )
+
+        best_entry[
+            "h1_multistart_selected_chi2"
+        ] = float(
+            best_chi2
+        )
+
+        winner_fit_rr = best_entry.get(
+            "fit_rr",
+            None,
+        )
+
+        winner_fit_results = getattr(
+            winner_fit_rr,
+            "fit_results",
+            None,
+        )
+
+        if isinstance(
+            winner_fit_results,
+            dict,
+        ):
+
+            winner_fit_results[
+                "h1_multistart_n"
+            ] = int(
+                len(candidates)
+            )
+
+            winner_fit_results[
+                "h1_multistart_selected"
+            ] = str(
+                best_candidate["id"]
+            )
+
+            winner_fit_results[
+                "h1_multistart_selected_piEN"
+            ] = float(
+                best_candidate["piEN"]
+            )
+
+            winner_fit_results[
+                "h1_multistart_selected_piEE"
+            ] = float(
+                best_candidate["piEE"]
+            )
+
+            winner_fit_results[
+                "h1_multistart_selected_chi2"
+            ] = float(
+                best_chi2
+            )
+
+            winner_fit_results[
+                "h1_multistart_candidates"
+            ] = candidate_records
+
+        # ------------------------------------------------------------
+        # Persist a human-readable diagnostic sidecar.
+        # ------------------------------------------------------------
+
+        import json as _json
+
+        diagnostic_path = (
+            base_fit_path
+            / "H1_multistart_diagnostics.json"
+        )
+
+        diagnostic_path.write_text(
+            _json.dumps(
+                multistart_metadata,
+                indent=2,
+            )
+            + "\n"
+        )
+
+        # ------------------------------------------------------------
+        # Preserve the traditional H1 .npy location.
+        #
+        # Candidate fits live under _H1_multistart/<candidate>/.
+        # Copy the selected candidate's saved .npy file(s) back to the
+        # normal event fit directory so existing analysis code still works.
+        # ------------------------------------------------------------
+
+        import shutil as _shutil
+
+        copied_files = []
+
+        for src in sorted(
+            best_candidate_dir.glob(
+                "*.npy"
+            )
+        ):
+
+            dst = (
+                base_fit_path
+                / src.name
+            )
+
+            _shutil.copy2(
+                src,
+                dst,
+            )
+
+            copied_files.append(
+                dst
+            )
+
+            # Add compact multistart metadata to the standard winning npy.
+            try:
+
+                saved = np.load(
+                    dst,
+                    allow_pickle=True,
+                ).item()
+
+                saved[
+                    "h1_multistart_n"
+                ] = int(
+                    len(candidates)
+                )
+
+                saved[
+                    "h1_multistart_selected"
+                ] = str(
+                    best_candidate["id"]
+                )
+
+                saved[
+                    "h1_multistart_selected_piEN"
+                ] = float(
+                    best_candidate["piEN"]
+                )
+
+                saved[
+                    "h1_multistart_selected_piEE"
+                ] = float(
+                    best_candidate["piEE"]
+                )
+
+                saved[
+                    "h1_multistart_selected_chi2"
+                ] = float(
+                    best_chi2
+                )
+
+                saved[
+                    "h1_multistart_candidates"
+                ] = candidate_records
+
+                np.save(
+                    dst,
+                    saved,
+                )
+
+            except Exception as error:
+
+                print(
+                    "[H1_multistart] WARNING: could not append metadata "
+                    f"to {dst}: {repr(error)}",
+                    flush=True,
+                )
+
+        print(
+            "[H1_multistart] SELECTED "
+            f"id={best_candidate['id']} "
+            f"index={best_candidate['index']} "
+            f"piEN={best_candidate['piEN']:.16g} "
+            f"piEE={best_candidate['piEE']:.16g} "
+            f"flux_mode={best_candidate['flux_mode']} "
+            f"chi2={best_chi2:.16g} "
+            f"H0_chi2={h0_chi2:.16g} "
+            f"T={h0_chi2-best_chi2:.16g}",
+            flush=True,
+        )
+
+        print(
+            "[H1_multistart] standard winner files copied: "
+            f"{[str(p) for p in copied_files]}",
+            flush=True,
+        )
+
+        results = dict(
+            existing_results
+        )
+
+        results[
+            alternative_key
+        ] = best_entry
+
+        return results
+
+    _ORIGINAL_RUN_MULTIPLE_NAMED_FITS_H1_MULTISTART = (
+        current_multi
+    )
+
+    frr.run_multiple_named_fits = (
+        run_multiple_named_fits_h1_multistart
+    )
+
+    _H1_PARALLAX_GRID_MULTISTART_PATCH_INSTALLED = True
+
+    print(
+        "[H1_multistart] runtime grid patch installed",
+        flush=True,
+    )
+
+
+install_h1_parallax_grid_multistart_runtime_patch()
+
+def _noise_realizations_config():
+    """
+    Read and validate the optional top-level noise_realizations section.
+
+    If absent or disabled, legacy one-task-per-event behavior is preserved.
+    """
+
+    raw = CONFIG.get(
+        "noise_realizations",
+        {},
+    )
+
+    if raw is None:
+        raw = {}
+
+    if not isinstance(
+        raw,
+        dict,
+    ):
+        raise TypeError(
+            "noise_realizations must be a JSON object."
+        )
+
+    enabled = bool(
+        raw.get(
+            "enabled",
+            False,
+        )
+    )
+
+    if not enabled:
+        return {
+            "enabled": False,
+            "n_realizations": 1,
+            "base_seed": 0,
+            "truth_cases": [],
+            "paired_noise": True,
+        }
+
+    # Initial implementation is deliberately Rubin-only because the
+    # controlled random draw is apply_roman_rubin_photometry().
+    if USE_ROMAN:
+        raise RuntimeError(
+            "The current noise-realization implementation is "
+            "intentionally Rubin-only. "
+            "Set observing.use_roman=false for this experiment."
+        )
+
+    n_realizations = int(
+        raw.get(
+            "n_realizations",
+            1,
+        )
+    )
+
+    if n_realizations <= 0:
+        raise ValueError(
+            "noise_realizations.n_realizations must be > 0."
+        )
+
+    base_seed = int(
+        raw.get(
+            "base_seed",
+            20260901,
+        )
+    )
+
+    raw_truth_cases = raw.get(
+        "truth_cases",
+        [
+            "H0",
+            "H1",
+        ],
+    )
+
+    if not isinstance(
+        raw_truth_cases,
+        (
+            list,
+            tuple,
+        ),
+    ):
+        raise TypeError(
+            "noise_realizations.truth_cases must be a list."
+        )
+
+    truth_cases = []
+
+    for value in raw_truth_cases:
+
+        value = str(
+            value
+        ).strip().upper()
+
+        if value not in {
+            "H0",
+            "H1",
+        }:
+            raise ValueError(
+                "noise_realizations.truth_cases accepts "
+                "only H0/H1; "
+                f"got {value!r}."
+            )
+
+        if value not in truth_cases:
+            truth_cases.append(
+                value
+            )
+
+    if not truth_cases:
+        raise ValueError(
+            "noise_realizations.truth_cases cannot be empty."
+        )
+
+    return {
+        "enabled": True,
+        "n_realizations":
+            n_realizations,
+        "base_seed":
+            base_seed,
+        "truth_cases":
+            truth_cases,
+        "paired_noise":
+            bool(
+                raw.get(
+                    "paired_noise",
+                    True,
+                )
+            ),
+    }
+
+
+def _noise_realization_seed(
+    base_seed,
+    catalog_row,
+    realization_id,
+    truth_case,
+    paired_noise,
+):
+    """
+    Construct a deterministic photometric-noise seed.
+
+    This seed depends on physical-event identity and realization number,
+    but NOT on worker/chunk/SLURM ordering.
+
+    If paired_noise=True, truth_case is deliberately excluded so that
+    H0 and H1 receive common random numbers.
+    """
+
+    entropy = [
+        int(base_seed),
+        int(catalog_row),
+        int(realization_id),
+    ]
+
+    if not paired_noise:
+        entropy.append(
+            0
+            if str(
+                truth_case
+            ).upper() == "H0"
+            else 1
+        )
+
+    seed_sequence = (
+        np.random.SeedSequence(
+            entropy
+        )
+    )
+
+    return int(
+        seed_sequence.generate_state(
+            1,
+            dtype=np.uint32,
+        )[0]
+    )
+
+
+def _noise_realization_tasks_per_event():
+    """
+    Number of logical tasks generated per physical event.
+    """
+
+    config = (
+        _noise_realizations_config()
+    )
+
+    if not config["enabled"]:
+        return 1
+
+    return (
+        int(
+            config[
+                "n_realizations"
+            ]
+        )
+        * len(
+            config[
+                "truth_cases"
+            ]
+        )
+    )
+
+
+def build_tasks(
+    prepared_catalog,
+):
+    """
+    Wrapper around the original one-task-per-event builder.
+
+    Legacy mode
+    -----------
+    If noise_realizations.enabled is false/missing:
+        exactly the old task list is returned.
+
+    Noise-MC mode
+    -------------
+    Each physical event is expanded into
+
+        n_realizations x truth_cases
+
+    logical datasets.
+
+    Important:
+        simulation_seed is NOT changed between realizations.
+        noise_seed is the quantity that changes.
+
+    H0 truth:
+        piEN = 0
+        piEE = 0
+
+    H1 truth:
+        piEN/piEE = catalog values
+
+    truth_parallax=True for BOTH H0 and H1 so the same truth-generator
+    code path is used. H0 is simply the nested point pi_E=(0,0).
+    """
+
+    base_tasks = (
+        _build_tasks_single_realization_legacy(
+            prepared_catalog
+        )
+    )
+
+    config = (
+        _noise_realizations_config()
+    )
+
+    if not config["enabled"]:
+        return base_tasks
+
+    expanded = []
+
+    for base_task in base_tasks:
+
+        catalog_row = int(
+            base_task[
+                "catalog_row"
+            ]
+        )
+
+        catalog_piEN = float(
+            base_task[
+                "piEN"
+            ]
+        )
+
+        catalog_piEE = float(
+            base_task[
+                "piEE"
+            ]
+        )
+
+        catalog_piE = float(
+            base_task.get(
+                "piE",
+                np.hypot(
+                    catalog_piEN,
+                    catalog_piEE,
+                ),
+            )
+        )
+
+        # This is intentionally identical across every noise realization
+        # of the same physical event.
+        simulation_seed = int(
+            base_task[
+                "simulation_seed"
+            ]
+        )
+
+        for realization_id in range(
+            config[
+                "n_realizations"
+            ]
+        ):
+
+            for truth_case in config[
+                "truth_cases"
+            ]:
+
+                noise_seed = (
+                    _noise_realization_seed(
+                        base_seed=
+                            config[
+                                "base_seed"
+                            ],
+                        catalog_row=
+                            catalog_row,
+                        realization_id=
+                            realization_id,
+                        truth_case=
+                            truth_case,
+                        paired_noise=
+                            config[
+                                "paired_noise"
+                            ],
+                    )
+                )
+
+                if truth_case == "H0":
+
+                    effective_piEN = 0.0
+                    effective_piEE = 0.0
+                    effective_piE = 0.0
+
+                else:
+
+                    effective_piEN = (
+                        catalog_piEN
+                    )
+
+                    effective_piEE = (
+                        catalog_piEE
+                    )
+
+                    effective_piE = float(
+                        np.hypot(
+                            effective_piEN,
+                            effective_piEE,
+                        )
+                    )
+
+                task = dict(
+                    base_task
+                )
+
+                realization_key = (
+                    f"event_{catalog_row:07d}_"
+                    f"{truth_case.lower()}_"
+                    f"r{realization_id:06d}"
+                )
+
+                task.update(
+                    {
+                        # ------------------------------
+                        # Monte-Carlo identity
+                        # ------------------------------
+                        "truth_case":
+                            truth_case,
+
+                        # Keep parallax machinery active in both cases.
+                        "truth_parallax":
+                            True,
+
+                        "noise_realization_id":
+                            int(
+                                realization_id
+                            ),
+
+                        "noise_seed":
+                            int(
+                                noise_seed
+                            ),
+
+                        "noise_base_seed":
+                            int(
+                                config[
+                                    "base_seed"
+                                ]
+                            ),
+
+                        "paired_noise":
+                            bool(
+                                config[
+                                    "paired_noise"
+                                ]
+                            ),
+
+                        "realization_key":
+                            realization_key,
+
+                        # ------------------------------
+                        # Original catalog parallax
+                        # ------------------------------
+                        "catalog_piE":
+                            catalog_piE,
+
+                        "catalog_piEN":
+                            catalog_piEN,
+
+                        "catalog_piEE":
+                            catalog_piEE,
+
+                        # ------------------------------
+                        # Effective truth simulated
+                        # ------------------------------
+                        "piE":
+                            effective_piE,
+
+                        "piEN":
+                            effective_piEN,
+
+                        "piEE":
+                            effective_piEE,
+
+                        "effective_truth_piE":
+                            effective_piE,
+
+                        "effective_truth_piEN":
+                            effective_piEN,
+
+                        "effective_truth_piEE":
+                            effective_piEE,
+
+                        # Explicitly preserve physical-event seed.
+                        "simulation_seed":
+                            simulation_seed,
+                    }
+                )
+
+                expanded.append(
+                    task
+                )
+
+    return expanded
+
+
+def _apply_roman_rubin_photometry_noise_realization(
+    *args,
+    **kwargs,
+):
+    """
+    Call the ORIGINAL Rubin photometry routine with an optional
+    temporary NumPy RNG seed.
+
+    The old NumPy RNG state is restored immediately after photometry.
+
+    Therefore noise_seed affects only this photometric-noise block,
+    rather than changing the random state of the full simulation/fit.
+    """
+
+    if (
+        _ORIGINAL_APPLY_ROMAN_RUBIN_PHOTOMETRY
+        is None
+    ):
+        raise RuntimeError(
+            "Noise runtime patch was called before storing "
+            "the original apply_roman_rubin_photometry function."
+        )
+
+    if (
+        _RUNTIME_PHOTOMETRY_NOISE_SEED
+        is None
+    ):
+        return (
+            _ORIGINAL_APPLY_ROMAN_RUBIN_PHOTOMETRY(
+                *args,
+                **kwargs,
+            )
+        )
+
+    seed = int(
+        _RUNTIME_PHOTOMETRY_NOISE_SEED
+    )
+
+    if (
+        seed < 0
+        or seed > 2**32 - 1
+    ):
+        raise ValueError(
+            f"Invalid photometry noise seed: {seed}"
+        )
+
+    previous_state = (
+        np.random.get_state()
+    )
+
+    try:
+
+        np.random.seed(
+            seed
+        )
+
+        return (
+            _ORIGINAL_APPLY_ROMAN_RUBIN_PHOTOMETRY(
+                *args,
+                **kwargs,
+            )
+        )
+
+    finally:
+
+        np.random.set_state(
+            previous_state
+        )
+
+
+def install_noise_realization_runtime_patch():
+    """
+    Patch the imported functions_roman_rubin module in this worker only.
+
+    No source file is overwritten.
+    """
+
+    global _ORIGINAL_APPLY_ROMAN_RUBIN_PHOTOMETRY
+    global _NOISE_RUNTIME_PATCH_INSTALLED
+
+    if _NOISE_RUNTIME_PATCH_INSTALLED:
+        return
+
+    if not hasattr(
+        frr,
+        "apply_roman_rubin_photometry",
+    ):
+        raise RuntimeError(
+            "functions_roman_rubin does not expose "
+            "apply_roman_rubin_photometry."
+        )
+
+    _ORIGINAL_APPLY_ROMAN_RUBIN_PHOTOMETRY = (
+        frr.apply_roman_rubin_photometry
+    )
+
+    frr.apply_roman_rubin_photometry = (
+        _apply_roman_rubin_photometry_noise_realization
+    )
+
+    _NOISE_RUNTIME_PATCH_INSTALLED = True
+
+
+def set_runtime_noise_realization_context(
+    task,
+):
+    """
+    Select the photometric-noise realization for the current event.
+
+    Legacy tasks have no noise_seed and therefore reproduce old behavior.
+    """
+
+    global _RUNTIME_PHOTOMETRY_NOISE_SEED
+
+    seed = task.get(
+        "noise_seed",
+        None,
+    )
+
+    if seed in (
+        None,
+        "",
+    ):
+        _RUNTIME_PHOTOMETRY_NOISE_SEED = None
+
+    else:
+        _RUNTIME_PHOTOMETRY_NOISE_SEED = int(
+            seed
+        )
+
 
 
 # ============================================================================
@@ -3741,6 +9396,15 @@ def task_metadata(base_row, task):
                     FIT_INITIAL_GUESS,
                     default=str,
                 )
+            )
+        ),
+        "fit_optimizer_options": (
+            "pyLIMA_default"
+            if FIT_OPTIMIZER_OPTIONS is None
+            else json.dumps(
+                FIT_OPTIMIZER_OPTIONS,
+                sort_keys=True,
+                default=str,
             )
         ),
         "run_multiple_fits": bool(RUN_MULTIPLE_FITS),
@@ -4315,7 +9979,10 @@ def run_single_event(task):
     global_i = int(task["global_i"])
     simulation_seed = int(task["simulation_seed"])
     field_name = str(task["field_name"])
-    event_tag = f"event_{global_i:07d}"
+    event_tag = task.get(
+        "realization_key",
+        f"event_{global_i:07d}",
+    )
 
     model_dir = (
         Path(config["models_dir"])
@@ -4360,6 +10027,7 @@ def run_single_event(task):
     }
 
     set_runtime_event_context(base_row)
+    set_runtime_noise_realization_context(task)
 
     try:
         pair_catalog = build_single_row_pair_catalog(
@@ -4408,7 +10076,15 @@ def run_single_event(task):
                     "fit_model": config["fit_model"],
                     "fit_parallax": config["fit_parallax"],
                     "fit_bounds": config["fit_bounds"],
-                    "truth_parallax": config.get("truth_parallax", True),
+                    "truth_parallax": bool(
+                        task.get(
+                            "truth_parallax",
+                            config.get(
+                                "truth_parallax",
+                                True,
+                            ),
+                        )
+                    ),
                     "rubin_pointing_mode": config["rubin_pointing_mode"],
                     "rubin_cache_cell_deg": config["rubin_cache_cell_deg"],
                     "return_data": True,
@@ -4432,6 +10108,22 @@ def run_single_event(task):
                         "pero la función seleccionada "
                         f"{getattr(sim_fit, '__name__', sim_fit)!r} "
                         "no acepta initial_guess."
+                    )
+
+                if "optimizer_options" in sim_fit_parameters:
+
+                    sim_fit_kwargs["optimizer_options"] = config.get(
+                        "optimizer_options",
+                        None,
+                    )
+
+                elif config.get("optimizer_options", None) is not None:
+
+                    raise RuntimeError(
+                        "El config define fit.optimizer_options, "
+                        "pero la función seleccionada "
+                        f"{getattr(sim_fit, '__name__', sim_fit)!r} "
+                        "no acepta optimizer_options."
                     )
 
                 optional_sim_fit_path_kwargs = {
@@ -4468,6 +10160,10 @@ def run_single_event(task):
                 print("rubin_opsim_db_path =", config.get("rubin_opsim_db_path", ""))
                 print("run_multiple_fits =", config.get("run_multiple_fits", False))
                 print("initial_guess =", config.get("initial_guess", None))
+                print(
+                    "optimizer_options =",
+                    config.get("optimizer_options", None),
+                )
                 print("primary_fit =", config.get("primary_fit", None))
                 print("fit_specs keys =", list(config.get("fit_specs", {}).keys()) if isinstance(config.get("fit_specs", None), dict) else config.get("fit_specs", None))
                 print("lrt_config =", config.get("lrt_config", None))
@@ -4537,6 +10233,19 @@ def run_single_event(task):
                         result.get("multi_fit_summary_path", "")
                     )
 
+                    pipeline_timings = result.get(
+                        "pipeline_timings",
+                        {},
+                    )
+
+                    if isinstance(pipeline_timings, dict):
+                        for key, value in pipeline_timings.items():
+
+                            if isinstance(value, np.generic):
+                                value = value.item()
+
+                            summary[str(key)] = value
+
                     lrt_results = result.get("lrt_results", None)
                     if isinstance(lrt_results, dict):
                         for key, value in lrt_results.items():
@@ -4575,6 +10284,22 @@ def run_single_event(task):
                 else:
                     summary["status"] = "ok"
                     summary["sim_fit_status"] = type(result).__name__
+
+                # PREFIT_DETECTABILITY summary
+                detectability_payload = dict(
+                    _RUNTIME_LAST_DETECTABILITY
+                )
+                summary.update(
+                    detectability_payload
+                )
+                if detectability_payload.get("detectability_enabled", False):
+                    if detectability_payload.get("detectability_audit_only", False):
+                        if detectability_payload.get("detectability_pass", False):
+                            summary["status"] = "detectability_pass"
+                        else:
+                            summary["status"] = "detectability_fail"
+                    elif not detectability_payload.get("detectability_pass", False):
+                        summary["status"] = "rejected_detectability"
 
                 fit_counts = dict(_RUNTIME_LAST_FIT_COUNTS)
                 summary["fit_n_points_total"] = int(
@@ -4717,6 +10442,10 @@ def print_diagnostics(
     print(
         "Initial guess:         "
         f"{FIT_INITIAL_GUESS if FIT_INITIAL_GUESS is not None else 'random'}"
+    )
+    print(
+        "TRF options:           "
+        f"{FIT_OPTIMIZER_OPTIONS if FIT_OPTIMIZER_OPTIONS is not None else 'pyLIMA defaults'}"
     )
     print(f"Truth parallax:        {TRUTH_PARALLAX}")
     print(f"Run multiple fits:     {RUN_MULTIPLE_FITS}")
@@ -4862,12 +10591,628 @@ def build_parser():
         ),
     )
 
+    parser.add_argument(
+        "--logical-task-start",
+        type=int,
+        default=None,
+        help=(
+            "Optional start index in the expanded logical task table. "
+            "Used by the noise-realization SLURM array."
+        ),
+    )
+
+    parser.add_argument(
+        "--logical-task-stop",
+        type=int,
+        default=None,
+        help=(
+            "Optional exclusive stop index in the expanded logical task "
+            "table. Used by the noise-realization SLURM array."
+        ),
+    )
+
     return parser
 
 
 # ============================================================================
 # Main
 # ============================================================================
+
+
+# ============================================================
+# BOUNDED_FLUX_PROFILE_RUNTIME_PATCH_V1
+#
+# Experimental Hidden-Parallax-only variable projection.
+#
+# Activate with:
+#
+#   export HIDDEN_PARALLAX_BOUNDED_PROFILE=1
+#
+# When active:
+#
+#   TRF H0: 4 nonlinear parameters
+#   TRF H1: 6 nonlinear parameters
+#
+# Telescope flux nuisance parameters are solved exactly, for each
+# model evaluation and each telescope, under the same pyLIMA bounds:
+#
+#   0 <= fsource <= max(flux)
+#   0 <= ftotal  <= max(flux)
+#
+# The model is
+#
+#   F = fsource * (A - 1) + ftotal
+#
+# This patch does NOT modify installed pyLIMA or shared fit_lc.py.
+# ============================================================
+
+
+def _bounded_flux_profile_enabled():
+
+    import os as _os
+
+    value = str(
+        _os.environ.get(
+            "HIDDEN_PARALLAX_BOUNDED_PROFILE",
+            "0",
+        )
+    ).strip().lower()
+
+    return value in {
+        "1",
+        "true",
+        "yes",
+        "on",
+    }
+
+
+_BOUNDED_FLUX_PROFILE_PATCH_INSTALLED = False
+_ORIGINAL_TRF_INIT_BOUNDED_PROFILE = None
+_ORIGINAL_DERIVE_TELESCOPE_FLUX_BOUNDED_PROFILE = None
+
+
+def _bounded_profile_ftotal_2d(
+    magnification,
+    flux,
+    err_flux,
+):
+    """
+    Exact weighted box-constrained least-squares solution for
+
+        flux = fsource * (A - 1) + ftotal
+
+    with pyLIMA's current bounds
+
+        0 <= fsource <= max(flux)
+        0 <= ftotal  <= max(flux)
+
+    Because there are only two linear variables, solve the convex
+    quadratic exactly by checking:
+
+        - unconstrained interior solution,
+        - fsource = lower,
+        - fsource = upper,
+        - ftotal  = lower,
+        - ftotal  = upper.
+
+    Edge minimizers are clipped to their allowed interval, so corners
+    are automatically included.
+    """
+
+    import numpy as _np
+
+    A = _np.asarray(
+        magnification,
+        dtype=float,
+    ).reshape(-1)
+
+    y = _np.asarray(
+        flux,
+        dtype=float,
+    ).reshape(-1)
+
+    sigma = _np.asarray(
+        err_flux,
+        dtype=float,
+    ).reshape(-1)
+
+    if not (
+        len(A)
+        == len(y)
+        == len(sigma)
+    ):
+        raise RuntimeError(
+            "bounded profile: incompatible array lengths."
+        )
+
+    good = (
+        _np.isfinite(A)
+        & _np.isfinite(y)
+        & _np.isfinite(sigma)
+        & (sigma > 0.0)
+    )
+
+    if not _np.all(good):
+        raise RuntimeError(
+            "bounded profile: non-finite photometric data."
+        )
+
+    x = A - 1.0
+
+    w = 1.0 / (
+        sigma * sigma
+    )
+
+    fmax = float(
+        _np.max(y)
+    )
+
+    if (
+        not _np.isfinite(fmax)
+        or fmax < 0.0
+    ):
+        raise RuntimeError(
+            "bounded profile: invalid max(flux)."
+        )
+
+    # Weighted sufficient statistics.
+    sw = float(
+        _np.sum(w)
+    )
+
+    sx = float(
+        _np.sum(w * x)
+    )
+
+    sxx = float(
+        _np.sum(w * x * x)
+    )
+
+    sy = float(
+        _np.sum(w * y)
+    )
+
+    sxy = float(
+        _np.sum(w * x * y)
+    )
+
+    if sw <= 0.0:
+        raise RuntimeError(
+            "bounded profile: non-positive total weight."
+        )
+
+    candidates = []
+
+    def _clip(value):
+
+        return float(
+            _np.clip(
+                value,
+                0.0,
+                fmax,
+            )
+        )
+
+    def _add(fs, ft, source):
+
+        fs = _clip(fs)
+        ft = _clip(ft)
+
+        residual = (
+            y
+            - fs * x
+            - ft
+        ) / sigma
+
+        chi2 = float(
+            _np.dot(
+                residual,
+                residual,
+            )
+        )
+
+        candidates.append(
+            (
+                chi2,
+                fs,
+                ft,
+                source,
+            )
+        )
+
+    # --------------------------------------------------------
+    # Unconstrained weighted least-squares interior
+    # --------------------------------------------------------
+
+    determinant = (
+        sxx * sw
+        - sx * sx
+    )
+
+    determinant_scale = max(
+        abs(
+            sxx * sw
+        ),
+        abs(
+            sx * sx
+        ),
+        1.0,
+    )
+
+    if abs(
+        determinant
+    ) > (
+        1.0e-14
+        * determinant_scale
+    ):
+
+        fs_free = (
+            sxy * sw
+            - sy * sx
+        ) / determinant
+
+        ft_free = (
+            sxx * sy
+            - sx * sxy
+        ) / determinant
+
+        if (
+            0.0 <= fs_free <= fmax
+            and
+            0.0 <= ft_free <= fmax
+        ):
+            _add(
+                fs_free,
+                ft_free,
+                "interior",
+            )
+
+    # --------------------------------------------------------
+    # Edge fsource = 0
+    # --------------------------------------------------------
+
+    fs = 0.0
+
+    ft = (
+        sy - fs * sx
+    ) / sw
+
+    _add(
+        fs,
+        ft,
+        "fsource_lower",
+    )
+
+    # --------------------------------------------------------
+    # Edge fsource = fmax
+    # --------------------------------------------------------
+
+    fs = fmax
+
+    ft = (
+        sy - fs * sx
+    ) / sw
+
+    _add(
+        fs,
+        ft,
+        "fsource_upper",
+    )
+
+    # --------------------------------------------------------
+    # Edges ftotal = 0 / fmax
+    # --------------------------------------------------------
+
+    if sxx > 0.0:
+
+        ft = 0.0
+
+        fs = (
+            sxy - ft * sx
+        ) / sxx
+
+        _add(
+            fs,
+            ft,
+            "ftotal_lower",
+        )
+
+        ft = fmax
+
+        fs = (
+            sxy - ft * sx
+        ) / sxx
+
+        _add(
+            fs,
+            ft,
+            "ftotal_upper",
+        )
+
+    # Degenerate A ~= constant case.
+    else:
+
+        _add(
+            0.0,
+            sy / sw,
+            "degenerate",
+        )
+
+    if not candidates:
+        raise RuntimeError(
+            "bounded profile: no finite candidate."
+        )
+
+    chi2, fs, ft, source = min(
+        candidates,
+        key=lambda item: item[0],
+    )
+
+    fb = float(
+        ft - fs
+    )
+
+    bound_tol = (
+        1.0e-10
+        * max(
+            1.0,
+            fmax,
+        )
+    )
+
+    if abs(
+        fs
+    ) <= bound_tol:
+        fs_active = "lower"
+
+    elif abs(
+        fs - fmax
+    ) <= bound_tol:
+        fs_active = "upper"
+
+    else:
+        fs_active = "free"
+
+    if abs(
+        ft
+    ) <= bound_tol:
+        ft_active = "lower"
+
+    elif abs(
+        ft - fmax
+    ) <= bound_tol:
+        ft_active = "upper"
+
+    else:
+        ft_active = "free"
+
+    return {
+        "fsource": float(fs),
+        "ftotal": float(ft),
+        "fblend": float(fb),
+        "chi2": float(chi2),
+        "fmax": float(fmax),
+        "solution_type": str(source),
+        "fsource_active": fs_active,
+        "ftotal_active": ft_active,
+    }
+
+
+def _install_bounded_flux_profile_runtime_patch():
+
+    global _BOUNDED_FLUX_PROFILE_PATCH_INSTALLED
+    global _ORIGINAL_TRF_INIT_BOUNDED_PROFILE
+    global _ORIGINAL_DERIVE_TELESCOPE_FLUX_BOUNDED_PROFILE
+
+    if _BOUNDED_FLUX_PROFILE_PATCH_INSTALLED:
+        return
+
+    if not _bounded_flux_profile_enabled():
+        return
+
+    # BOUNDED_FLUX_PROFILE_FIX_V2
+    from pyLIMA.models import ML_model as _ML_model
+    from pyLIMA.fits import TRF_fit as _TRF_fit
+
+    # --------------------------------------------------------
+    # Force TRF constructor into pyLIMA's "fluxes not fitted"
+    # path. This is essential: fit_parameters is constructed
+    # during __init__, so changing the method later is too late.
+    # --------------------------------------------------------
+
+    _ORIGINAL_TRF_INIT_BOUNDED_PROFILE = (
+        _TRF_fit.TRFfit.__init__
+    )
+
+    def _trf_init_bounded_profile(
+        self,
+        model,
+        telescopes_fluxes_method="fit",
+        loss_function="chi2",
+    ):
+
+        _ORIGINAL_TRF_INIT_BOUNDED_PROFILE(
+            self,
+            model,
+            telescopes_fluxes_method="polyfit",
+            loss_function=loss_function,
+        )
+
+        # The analytical pyLIMA residual Jacobian includes explicit
+        # telescope-flux columns and is therefore not the Jacobian
+        # of the reduced profiled problem.
+        self.model.Jacobian_flag = "Numerical"
+
+    _TRF_fit.TRFfit.__init__ = (
+        _trf_init_bounded_profile
+    )
+
+    # --------------------------------------------------------
+    # Replace only the implicit-flux branch.
+    #
+    # If explicit flux parameters are present, preserve original
+    # pyLIMA behavior exactly.
+    # --------------------------------------------------------
+
+    _ORIGINAL_DERIVE_TELESCOPE_FLUX_BOUNDED_PROFILE = (
+        _ML_model.MLmodel.derive_telescope_flux
+    )
+
+    def _derive_telescope_flux_bounded_profile(
+        self,
+        telescope,
+        pyLIMA_parameters,
+        magnification,
+    ):
+
+        key_fs = (
+            "fsource_"
+            + telescope.name
+        )
+
+        explicit_flux = False
+
+        try:
+            value = pyLIMA_parameters[
+                key_fs
+            ]
+
+            explicit_flux = (
+                value is not None
+            )
+
+        except (
+            TypeError,
+            KeyError,
+            IndexError,
+        ):
+            explicit_flux = False
+
+        if explicit_flux:
+
+            return (
+                _ORIGINAL_DERIVE_TELESCOPE_FLUX_BOUNDED_PROFILE(
+                    self,
+                    telescope,
+                    pyLIMA_parameters,
+                    magnification,
+                )
+            )
+
+        if (
+            self.blend_flux_parameter
+            != "ftotal"
+        ):
+
+            return (
+                _ORIGINAL_DERIVE_TELESCOPE_FLUX_BOUNDED_PROFILE(
+                    self,
+                    telescope,
+                    pyLIMA_parameters,
+                    magnification,
+                )
+            )
+
+        lightcurve = (
+            telescope.lightcurve
+        )
+
+        flux = lightcurve[
+            "flux"
+        ].value
+
+        err_flux = lightcurve[
+            "err_flux"
+        ].value
+
+        result = (
+            _bounded_profile_ftotal_2d(
+                magnification,
+                flux,
+                err_flux,
+            )
+        )
+
+        fs = result[
+            "fsource"
+        ]
+
+        ft = result[
+            "ftotal"
+        ]
+
+        fb = result[
+            "fblend"
+        ]
+
+        pyLIMA_parameters[
+            key_fs
+        ] = fs
+
+        pyLIMA_parameters[
+            "fblend_"
+            + telescope.name
+        ] = fb
+
+        pyLIMA_parameters[
+            "ftotal_"
+            + telescope.name
+        ] = ft
+
+        if fs != 0.0:
+
+            gblend = (
+                fb / fs
+            )
+
+        elif fb == 0.0:
+
+            gblend = 0.0
+
+        else:
+
+            gblend = float(
+                "inf"
+            )
+
+        pyLIMA_parameters[
+            "gblend_"
+            + telescope.name
+        ] = gblend
+
+        # Keep the most recent solution for diagnostics.
+        if not hasattr(
+            self,
+            "_bounded_profile_last_fluxes",
+        ):
+
+            self._bounded_profile_last_fluxes = {}
+
+        self._bounded_profile_last_fluxes[
+            telescope.name
+        ] = dict(
+            result
+        )
+
+        return None
+
+    _ML_model.MLmodel.derive_telescope_flux = (
+        _derive_telescope_flux_bounded_profile
+    )
+
+    _BOUNDED_FLUX_PROFILE_PATCH_INSTALLED = True
+
+    print(
+        "[bounded_flux_profile] "
+        "runtime patch installed; "
+        "TRF telescope fluxes are profiled with exact box constraints; "
+        "Jacobian=Numerical",
+        flush=True,
+    )
+
+
+_install_bounded_flux_profile_runtime_patch()
+
 
 def main():
     parser = build_parser()
@@ -4965,6 +11310,17 @@ def main():
             "no acepta initial_guess."
         )
 
+
+    if (
+        FIT_OPTIMIZER_OPTIONS is not None
+        and "optimizer_options" not in sim_fit_parameters
+    ):
+        raise RuntimeError(
+            "fit.optimizer_options está definido, pero "
+            f"{getattr(sim_fit, '__name__', sim_fit)!r} "
+            "no acepta optimizer_options."
+        )
+
     log_step("[main] Loading raw catalog ...")
     raw_catalog = load_raw_catalog(
         COLUMNS_FILE,
@@ -4995,6 +11351,74 @@ def main():
     tasks = build_tasks(
         prepared_catalog
     )
+
+
+    # ------------------------------------------------------------
+    # Optional slicing AFTER noise-realization expansion.
+    #
+    # This lets each SLURM array element load the same physical catalog
+    # window but execute a disjoint interval of logical realizations.
+    # ------------------------------------------------------------
+
+    logical_task_total = len(
+        tasks
+    )
+
+    logical_task_start = (
+        0
+        if args.logical_task_start is None
+        else int(
+            args.logical_task_start
+        )
+    )
+
+    logical_task_stop = (
+        logical_task_total
+        if args.logical_task_stop is None
+        else min(
+            int(
+                args.logical_task_stop
+            ),
+            logical_task_total,
+        )
+    )
+
+    if logical_task_start < 0:
+        raise ValueError(
+            "--logical-task-start must be >= 0."
+        )
+
+    if (
+        logical_task_stop
+        < logical_task_start
+    ):
+        raise ValueError(
+            "--logical-task-stop must be >= "
+            "--logical-task-start."
+        )
+
+    tasks = tasks[
+        logical_task_start:
+        logical_task_stop
+    ]
+
+    print(
+        "[logical tasks] "
+        f"total_expanded={logical_task_total}, "
+        f"selected=[{logical_task_start}, "
+        f"{logical_task_stop}), "
+        f"n_selected={len(tasks)}",
+        flush=True,
+    )
+
+    if len(tasks) == 0:
+        print(
+            "[logical tasks] Empty logical slice. "
+            "Nothing to run.",
+            flush=True,
+        )
+        return
+
 
     print_diagnostics(
         prepared_catalog,
@@ -5064,7 +11488,7 @@ def main():
         "PATH_EPHEMERIDES": str(
             PATH_EPHEMERIDES
         ),
-        "TASKS_PER_EVENT": 1,
+        "TASKS_PER_EVENT": _noise_realization_tasks_per_event(),
         "PARALLAX_ANGLE_COLUMN": PARALLAX_ANGLE_COLUMN,
         "PARALLAX_ANGLE_SEMANTICS": PARALLAX_ANGLE_SEMANTICS,
         "ALPHA_ASSUMED_EQUAL_TO_XI": False,
@@ -5115,6 +11539,8 @@ def main():
             FIT_BOUNDS_NOPIE,
         "FIT_INITIAL_GUESS":
             FIT_INITIAL_GUESS,
+        "FIT_OPTIMIZER_OPTIONS":
+            FIT_OPTIMIZER_OPTIONS,
         "SIMULATION_TIME_RANGE": "complete MAF cadence",
         "FIT_WINDOW_ENABLED": FIT_WINDOW_ENABLED,
         "FIT_WINDOW_HALF_WIDTH_TE": FIT_WINDOW_HALF_WIDTH_TE,
@@ -5205,6 +11631,8 @@ def main():
             FIT_BOUNDS_NOPIE,
         "initial_guess":
             FIT_INITIAL_GUESS,
+        "optimizer_options":
+            FIT_OPTIMIZER_OPTIONS,
         "rubin_pointing_mode":
             RUBIN_POINTING_MODE,
         "rubin_cache_cell_deg":
@@ -5280,7 +11708,23 @@ def main():
                 }
 
             summary_rows.append(row)
+
+            _summary_wall0 = time.perf_counter()
+            _summary_cpu0 = time.process_time()
+
             save_summary(summary_rows)
+
+            row["timing_run_summary_write_wall_s"] = float(
+                time.perf_counter() - _summary_wall0
+            )
+
+            row["timing_run_summary_write_cpu_s"] = float(
+                time.process_time() - _summary_cpu0
+            )
+
+            row["timing_run_summary_rows_written"] = int(
+                len(summary_rows)
+            )
 
             status_counts = pd.Series(
                 [
@@ -5353,7 +11797,23 @@ def main():
                 }
 
             summary_rows.append(row)
+
+            _summary_wall0 = time.perf_counter()
+            _summary_cpu0 = time.process_time()
+
             save_summary(summary_rows)
+
+            row["timing_run_summary_write_wall_s"] = float(
+                time.perf_counter() - _summary_wall0
+            )
+
+            row["timing_run_summary_write_cpu_s"] = float(
+                time.process_time() - _summary_cpu0
+            )
+
+            row["timing_run_summary_rows_written"] = int(
+                len(summary_rows)
+            )
 
             if (
                 completed == 1

@@ -13,7 +13,7 @@ RUN_DIR="/export/storage3/rubin/microlensing/romanrubin/ulensing_degenerate_mode
 OUTPUT_ROOT="/export/storage3/rubin/microlensing/romanrubin/hidden_parallax"
 
 RUNNER_SOURCE="${PROJECT_DIR}/run_lsstmonts_catalog_hidden_parallax.py"
-CONFIG_SOURCE="${PROJECT_DIR}/configs/config_lsstmonts_baseline_v5p3p5_cluster_che_multifit_LRT_truth_init.json"
+CONFIG_SOURCE="${CONFIG_SOURCE:-${PROJECT_DIR}/configs/config_lsstmonts_baseline_v5p3p5_cluster_che_multifit_LRT_truth_init.json}"
 SLURM_SCRIPT="${SCRIPT_DIR}/run_lsstmonts_production_array.slurm"
 
 # Full LSSTMONTS catalog has 966000 rows.
@@ -29,6 +29,19 @@ WORKERS="${WORKERS:-10}"
 
 # Use exactly 5 machines at a time.
 MAX_CONCURRENT="${MAX_CONCURRENT:-5}"
+
+
+# Resources requested per SLURM array task.
+# Command-line sbatch options below override the fixed #SBATCH defaults
+# in run_lsstmonts_production_array.slurm.
+CPUS_PER_TASK="${CPUS_PER_TASK:-20}"
+
+# Leave empty to keep the memory value defined in the .slurm file.
+# Examples: 4G, 20G, 80G.
+MEM_PER_TASK="${MEM_PER_TASK:-}"
+
+# Optional SLURM dependency, e.g. afterok:123456.
+DEPENDENCY="${DEPENDENCY:-}"
 
 # If 1, existing partial output directories for a chunk are moved aside and rerun.
 # Keep 0 for production safety.
@@ -93,6 +106,9 @@ MANIFEST="${FROZEN_DIR}/manifest.txt"
   echo "array_max=${ARRAY_MAX}"
   echo "workers=${WORKERS}"
   echo "max_concurrent=${MAX_CONCURRENT}"
+  echo "cpus_per_task=${CPUS_PER_TASK}"
+  echo "mem_per_task=${MEM_PER_TASK:-slurm_default}"
+  echo "dependency=${DEPENDENCY:-none}"
   echo "force_rerun=${FORCE_RERUN}"
   echo "config_sha256=$(awk '{print $1}' "${CFG_PATH}.SHA256")"
 } > "${MANIFEST}"
@@ -114,6 +130,9 @@ N_CHUNKS         = ${N_CHUNKS}
 ARRAY            = 0-${ARRAY_MAX}%${MAX_CONCURRENT}
 WORKERS/job      = ${WORKERS}
 MAX_CONCURRENT   = ${MAX_CONCURRENT}
+CPUS/task        = ${CPUS_PER_TASK}
+MEM/task         = ${MEM_PER_TASK:-SLURM default}
+DEPENDENCY       = ${DEPENDENCY:-none}
 FORCE_RERUN      = ${FORCE_RERUN}
 MANIFEST         = ${MANIFEST}
 ============================================================
@@ -121,10 +140,24 @@ INFO
 
 cd "${RUN_DIR}"
 
-sbatch \
-  --array="0-${ARRAY_MAX}%${MAX_CONCURRENT}" \
-  --export=ALL,CFG_PATH="${CFG_PATH}",RUNNER_PATH="${RUNNER_PATH}",RUN_TAG="${RUN_TAG}",ROW_START_GLOBAL="${ROW_START_GLOBAL}",ROW_STOP_GLOBAL="${ROW_STOP_GLOBAL}",CHUNK_SIZE="${CHUNK_SIZE}",WORKERS="${WORKERS}",FORCE_RERUN="${FORCE_RERUN}" \
-  "${SLURM_SCRIPT}"
+SBATCH_ARGS=(
+  --array="0-${ARRAY_MAX}%${MAX_CONCURRENT}"
+  --cpus-per-task="${CPUS_PER_TASK}"
+)
+
+if [[ -n "${MEM_PER_TASK}" ]]; then
+  SBATCH_ARGS+=(--mem="${MEM_PER_TASK}")
+fi
+
+if [[ -n "${DEPENDENCY}" ]]; then
+  SBATCH_ARGS+=(--dependency="${DEPENDENCY}")
+fi
+
+SBATCH_ARGS+=(
+  --export=ALL,CFG_PATH="${CFG_PATH}",RUNNER_PATH="${RUNNER_PATH}",RUN_TAG="${RUN_TAG}",ROW_START_GLOBAL="${ROW_START_GLOBAL}",ROW_STOP_GLOBAL="${ROW_STOP_GLOBAL}",CHUNK_SIZE="${CHUNK_SIZE}",WORKERS="${WORKERS}",FORCE_RERUN="${FORCE_RERUN}"
+)
+
+sbatch "${SBATCH_ARGS[@]}" "${SLURM_SCRIPT}"
 
 cat <<NEXT
 
