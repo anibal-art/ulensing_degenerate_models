@@ -281,7 +281,36 @@ srun --cpu-bind=cores -u python -u "${RUNNER_PATH}" \
   --run-name-suffix "${SUFFIX}"
 
 # ------------------------------------------------------------
-# Mark done only after successful completion
+# Archive per-event artifacts after successful runner completion
+# ------------------------------------------------------------
+
+ARCHIVER_PATH="$(dirname "${RUNNER_PATH}")/production/archive_chunk_artifacts.py"
+
+if [[ ! -f "${ARCHIVER_PATH}" ]]; then
+  echo "ERROR: archive helper not found: ${ARCHIVER_PATH}" >&2
+  exit 1
+fi
+
+echo "============================================================"
+echo "Chunk artifact archive"
+echo "============================================================"
+echo "ARCHIVER_PATH=${ARCHIVER_PATH}"
+echo "RUN_DIR=${RUN_DIR}"
+echo "START=${START}"
+echo "STOP=${STOP}"
+
+python -u "${ARCHIVER_PATH}" \
+  --run-dir "${RUN_DIR}" \
+  --config "${CFG_PATH}" \
+  --start "${START}" \
+  --stop "${STOP}" \
+  --run-tag "${RUN_TAG}" \
+  --workers "${WORKERS}"
+
+echo "============================================================"
+
+# ------------------------------------------------------------
+# Mark done only after runner + archive verification succeed
 # ------------------------------------------------------------
 
 {

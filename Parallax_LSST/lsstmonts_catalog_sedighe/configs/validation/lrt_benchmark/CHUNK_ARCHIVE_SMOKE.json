@@ -9,7 +9,7 @@
     "output_root": "/export/storage3/rubin/microlensing/romanrubin/hidden_parallax"
   },
   "path_storage": "${OUTPUT_ROOT}/runs",
-  "run_name": "LSSTMONTS_LRT_population_FAST",
+  "run_name": "LSSTMONTS_LRT_chunk_archive_smoke",
   "model": "FSPL",
   "algo": "TRF",
   "system_type": "FFP",
@@ -221,7 +221,7 @@
     "random_seed": 20260730,
     "prepare_only": false,
     "post_detectability_timeout_s": 600.0,
-    "summary_checkpoint_every": 50,
+    "summary_checkpoint_every": 5,
     "archive_chunk_artifacts": true,
     "archive_format": "tar",
     "archive_delete_sources_after_verify": true
