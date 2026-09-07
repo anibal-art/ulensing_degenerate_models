@@ -74,6 +74,7 @@ import traceback
 import inspect
 import time
 import shutil
+import signal
 import multiprocessing as mp
 from pathlib import Path
 from contextlib import redirect_stdout, redirect_stderr
@@ -1308,6 +1309,27 @@ N_WORKERS = int(
     cfg("execution", "workers", 8)
 )
 
+_TIMEOUT_RAW = cfg(
+    "execution",
+    "post_detectability_timeout_s",
+    None,
+)
+
+if (
+    _TIMEOUT_RAW is None
+    or str(_TIMEOUT_RAW).strip().lower()
+    in {"", "none", "off", "false", "0", "0.0"}
+):
+    POST_DETECTABILITY_TIMEOUT_S = None
+else:
+    POST_DETECTABILITY_TIMEOUT_S = float(_TIMEOUT_RAW)
+
+    if POST_DETECTABILITY_TIMEOUT_S <= 0.0:
+        raise ValueError(
+            "execution.post_detectability_timeout_s "
+            "must be positive, null, or off."
+        )
+
 MAX_BASE_EVENTS_CONFIG = first_config_value(
     topcfg("Nevents", None),
     cfg("selection", "max_base_events", None),
@@ -2381,6 +2403,98 @@ def extract_lightcurves_for_fit_catalog_window(pyLIMA_model):
 _ORIGINAL_SIM_EVENT_PREFIT_DETECTABILITY = None
 _PREFIT_DETECTABILITY_PATCH_INSTALLED = False
 _RUNTIME_LAST_DETECTABILITY = {}
+
+_RUNTIME_TIMEOUT_ARMED = False
+_RUNTIME_TIMEOUT_STARTED_WALL = None
+
+
+class PostDetectabilityTimeout(BaseException):
+    """Wall-clock timeout after a positive detectability decision."""
+
+    def __init__(self, timeout_s, elapsed_s):
+        self.timeout_s = float(timeout_s)
+        self.elapsed_s = float(elapsed_s)
+
+        super().__init__(
+            "Post-detectability logical-task timeout: "
+            f"limit={self.timeout_s:.3f}s, "
+            f"elapsed={self.elapsed_s:.3f}s"
+        )
+
+
+def _post_detectability_timeout_handler(signum, frame):
+    if _RUNTIME_TIMEOUT_STARTED_WALL is None:
+        elapsed = 0.0
+    else:
+        elapsed = (
+            time.perf_counter()
+            - _RUNTIME_TIMEOUT_STARTED_WALL
+        )
+
+    raise PostDetectabilityTimeout(
+        POST_DETECTABILITY_TIMEOUT_S,
+        elapsed,
+    )
+
+
+def _arm_post_detectability_timeout():
+    global _RUNTIME_TIMEOUT_ARMED
+    global _RUNTIME_TIMEOUT_STARTED_WALL
+
+    if POST_DETECTABILITY_TIMEOUT_S is None:
+        return
+
+    if _RUNTIME_TIMEOUT_ARMED:
+        return
+
+    if (
+        not hasattr(signal, "SIGALRM")
+        or not hasattr(signal, "setitimer")
+    ):
+        raise RuntimeError(
+            "post-detectability timeout requires "
+            "SIGALRM/setitimer on this platform."
+        )
+
+    signal.signal(
+        signal.SIGALRM,
+        _post_detectability_timeout_handler,
+    )
+
+    _RUNTIME_TIMEOUT_STARTED_WALL = (
+        time.perf_counter()
+    )
+
+    _RUNTIME_TIMEOUT_ARMED = True
+
+    signal.setitimer(
+        signal.ITIMER_REAL,
+        float(POST_DETECTABILITY_TIMEOUT_S),
+    )
+
+    print(
+        "[fit timeout] armed after detectability PASS: "
+        f"{POST_DETECTABILITY_TIMEOUT_S:.3f} s",
+        flush=True,
+    )
+
+
+def _cancel_post_detectability_timeout():
+    global _RUNTIME_TIMEOUT_ARMED
+    global _RUNTIME_TIMEOUT_STARTED_WALL
+
+    if (
+        _RUNTIME_TIMEOUT_ARMED
+        and hasattr(signal, "setitimer")
+    ):
+        signal.setitimer(
+            signal.ITIMER_REAL,
+            0.0,
+        )
+
+    _RUNTIME_TIMEOUT_ARMED = False
+    _RUNTIME_TIMEOUT_STARTED_WALL = None
+
 
 
 def _prefit_detectability_config():
@@ -3545,6 +3659,14 @@ def _sim_event_with_prefit_detectability(
             False,
         )
 
+    if bool(
+        metrics.get(
+            "detectability_pass",
+            False,
+        )
+    ):
+        _arm_post_detectability_timeout()
+
     # ------------------------------------------------------------
     # Gate mode.
     #
@@ -3710,6 +3832,8 @@ def set_runtime_event_context(base_row):
 
 
 def clear_runtime_event_context():
+    _cancel_post_detectability_timeout()
+
     global _RUNTIME_LAST_DETECTABILITY
     global _RUNTIME_BLEND_SOURCE_FRACTION
     global _RUNTIME_AVAILABLE_BANDS
@@ -10020,6 +10144,10 @@ def run_single_event(task):
         "status": "started",
         "sim_fit_status": "",
         "error": "",
+        "needs_refit": False,
+        "timeout_scope": "post_detectability_logical_task",
+        "timeout_seconds": POST_DETECTABILITY_TIMEOUT_S,
+        "timeout_elapsed_s": np.nan,
         "log_file": str(log_file),
         "model_dir": str(model_dir),
         "fit_dir": str(fit_dir),
@@ -10345,6 +10473,46 @@ def run_single_event(task):
                         f"{error!r}"
                     )
 
+    except PostDetectabilityTimeout as error:
+        summary["status"] = "fit_timeout"
+        summary["sim_fit_status"] = "fit_timeout"
+        summary["needs_refit"] = True
+        summary["timeout_seconds"] = float(
+            error.timeout_s
+        )
+        summary["timeout_elapsed_s"] = float(
+            error.elapsed_s
+        )
+
+        summary.update(
+            dict(_RUNTIME_LAST_DETECTABILITY)
+        )
+
+        fit_counts = dict(
+            _RUNTIME_LAST_FIT_COUNTS
+        )
+
+        summary["fit_n_points_total"] = int(
+            sum(fit_counts.values())
+        )
+
+        for band in [
+            "W149", "u", "g", "r", "i", "z", "y"
+        ]:
+            summary[f"fit_n_points_{band}"] = int(
+                fit_counts.get(band, 0)
+            )
+
+        with open(log_file, "a") as log:
+            log.write("\n" + "=" * 80 + "\n")
+            log.write("FIT TIMEOUT\n")
+            log.write("=" * 80 + "\n")
+            log.write(str(error) + "\n")
+            log.write(
+                "This realization is reproducible "
+                "from catalog_row + seeds + frozen config.\n"
+            )
+
     except FitWindowRejected as error:
         summary["status"] = "rejected_fit_window"
         summary["sim_fit_status"] = "fit_window_rejected"
@@ -10401,6 +10569,23 @@ def save_summary(summary_rows):
 
     summary.to_parquet(
         DIRS["logs"] / "run_summary.parquet",
+        index=False,
+    )
+
+    if "status" in summary.columns:
+        laggards = summary.loc[
+            summary["status"].eq("fit_timeout")
+        ].copy()
+    else:
+        laggards = summary.iloc[0:0].copy()
+
+    laggards.to_csv(
+        DIRS["logs"] / "laggards.csv",
+        index=False,
+    )
+
+    laggards.to_parquet(
+        DIRS["logs"] / "laggards.parquet",
         index=False,
     )
 
@@ -11514,6 +11699,8 @@ def main():
             len(prepared_catalog),
         "N_TASKS": len(tasks),
         "N_WORKERS": workers,
+        "POST_DETECTABILITY_TIMEOUT_S":
+            POST_DETECTABILITY_TIMEOUT_S,
         "RANDOM_SEED": RANDOM_SEED,
         "SYSTEM_TYPE": SYSTEM_TYPE,
         "MODEL": MODEL,
