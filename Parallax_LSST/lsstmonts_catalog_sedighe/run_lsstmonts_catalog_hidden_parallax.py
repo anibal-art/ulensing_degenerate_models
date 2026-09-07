@@ -1330,6 +1330,19 @@ else:
             "must be positive, null, or off."
         )
 
+SUMMARY_CHECKPOINT_EVERY = int(
+    cfg(
+        "execution",
+        "summary_checkpoint_every",
+        1,
+    )
+)
+
+if SUMMARY_CHECKPOINT_EVERY <= 0:
+    raise ValueError(
+        "execution.summary_checkpoint_every must be > 0."
+    )
+
 MAX_BASE_EVENTS_CONFIG = first_config_value(
     topcfg("Nevents", None),
     cfg("selection", "max_base_events", None),
@@ -11896,22 +11909,26 @@ def main():
 
             summary_rows.append(row)
 
-            _summary_wall0 = time.perf_counter()
-            _summary_cpu0 = time.process_time()
+            if (
+                len(summary_rows) % SUMMARY_CHECKPOINT_EVERY == 0
+                or len(summary_rows) == len(tasks)
+            ):
+                _summary_wall0 = time.perf_counter()
+                _summary_cpu0 = time.process_time()
 
-            save_summary(summary_rows)
+                save_summary(summary_rows)
 
-            row["timing_run_summary_write_wall_s"] = float(
-                time.perf_counter() - _summary_wall0
-            )
+                row["timing_run_summary_write_wall_s"] = float(
+                    time.perf_counter() - _summary_wall0
+                )
 
-            row["timing_run_summary_write_cpu_s"] = float(
-                time.process_time() - _summary_cpu0
-            )
+                row["timing_run_summary_write_cpu_s"] = float(
+                    time.process_time() - _summary_cpu0
+                )
 
-            row["timing_run_summary_rows_written"] = int(
-                len(summary_rows)
-            )
+                row["timing_run_summary_rows_written"] = int(
+                    len(summary_rows)
+                )
 
             status_counts = pd.Series(
                 [
@@ -11985,22 +12002,26 @@ def main():
 
             summary_rows.append(row)
 
-            _summary_wall0 = time.perf_counter()
-            _summary_cpu0 = time.process_time()
+            if (
+                len(summary_rows) % SUMMARY_CHECKPOINT_EVERY == 0
+                or len(summary_rows) == len(tasks)
+            ):
+                _summary_wall0 = time.perf_counter()
+                _summary_cpu0 = time.process_time()
 
-            save_summary(summary_rows)
+                save_summary(summary_rows)
 
-            row["timing_run_summary_write_wall_s"] = float(
-                time.perf_counter() - _summary_wall0
-            )
+                row["timing_run_summary_write_wall_s"] = float(
+                    time.perf_counter() - _summary_wall0
+                )
 
-            row["timing_run_summary_write_cpu_s"] = float(
-                time.process_time() - _summary_cpu0
-            )
+                row["timing_run_summary_write_cpu_s"] = float(
+                    time.process_time() - _summary_cpu0
+                )
 
-            row["timing_run_summary_rows_written"] = int(
-                len(summary_rows)
-            )
+                row["timing_run_summary_rows_written"] = int(
+                    len(summary_rows)
+                )
 
             if (
                 completed == 1

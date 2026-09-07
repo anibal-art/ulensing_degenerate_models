@@ -56,3 +56,41 @@ DE+TRF will be reserved for realizations close enough to the empirically calibra
 The full production run first builds the empirical H0 distribution over detectable events.
 T_alpha will be calibrated from that population for the selected false-positive rate.
 The same threshold will then be applied to H1 simulations to estimate statistical power.
+
+## Chunk artifact archival validation
+
+Before full production, per-event output storage was changed to a chunk-level archive strategy.
+
+Motivation:
+- The 50-event integration produced 732 individual files.
+- Linear extrapolation to 966000 physical events would imply of order 14 million files.
+- Disk volume itself was acceptable, but filesystem metadata pressure from millions of files was not.
+- Scientific inspection requires retaining simulated light curves, truth parameters, final H0/H1 fits, and optimizer diagnostics.
+
+Policy adopted:
+- run_summary.parquet and run_summary.csv remain directly accessible.
+- laggards.parquet and laggards.csv remain directly accessible.
+- frozen configuration and event-task tables remain directly accessible.
+- fits/, models/, results/, and per-event logs are collected into one uncompressed TAR archive per chunk.
+- the archive is verified with tar before source deletion.
+- a SHA256 checksum and JSON manifest are written.
+- original per-event trees are deleted only after successful archive verification.
+- the DONE marker is written only after runner completion and archive verification.
+
+Smoke test job 103112:
+- 10 physical events / 20 logical H0-H1 datasets.
+- 16 rejected_detectability and 4 ok.
+- job completed successfully with exit code 0.
+- archive size: 4730880 bytes.
+- final chunk directory contained 14 files.
+- archive SHA256 verification passed.
+
+Scientific equivalence test:
+- status, simulation_seed, noise_seed, and detectability_pass were identical to the previous integration run.
+- 81 scientific numerical summary columns were compared.
+- no numerical differences were found.
+
+Recovery test:
+- event 6 was recovered from the archive.
+- H0 and H1 HDF5 files retained time, flux, magnitude, uncertainty, photometric masks, and model light curves.
+- truth, fit_rr, multi_fit, final H0/H1 fit files, multistart diagnostics, and per-event logs were retained.

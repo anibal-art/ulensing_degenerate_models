@@ -360,4 +360,35 @@ A detailed record of the pre-production validation is stored in
 `validation/results/preproduction_LRT_validation_20260906.md`.
 
 
+
+### Full-production storage policy
+
+Full-catalogue production retains the complete scientific event products while
+avoiding millions of persistent small files.
+
+During execution, each chunk uses the standard per-event `fits/`, `models/`,
+`results/`, and log layout. After the runner completes successfully, these
+trees are collected into one uncompressed TAR archive for the chunk. The
+archive is checked for readability and assigned a SHA256 checksum before any
+source tree is deleted. A JSON manifest records the archive, row interval,
+frozen configuration checksum, workers, source roots, size, and checksum.
+
+Population-level products remain directly accessible outside the archive:
+`run_summary.parquet`, `run_summary.csv`, `laggards.parquet`,
+`laggards.csv`, the frozen configuration, and event-task tables.
+
+The archived event products retain simulated light curves, truth parameters,
+final H0/H1 fits, multistart diagnostics, and per-event logs. Therefore events
+selected later from the empirical H0/H1 distributions can be extracted and
+replotted without rerunning their simulations.
+
+The production configuration checkpoints the population summary every 50
+logical datasets instead of rewriting it after every completed realization.
+
+A 10-event smoke test (SLURM job 103112) reduced the completed chunk to 14
+persistent files while preserving all event artifacts. Comparison with the
+pre-archive integration showed identical status/seeds/detectability and no
+differences across 81 checked scientific numerical summary columns.
+
+
 <!-- END HIDDEN_PARALLAX_LRT_STATUS -->
