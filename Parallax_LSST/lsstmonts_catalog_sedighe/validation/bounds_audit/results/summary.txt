@@ -1,0 +1,15 @@
+N events = 34
+tails = 17
+controls = 17
+
+median I0 overall = 50363.482121
+median I1 overall = 0.019350
+median new/old LRT = 0.347172
+median fractional LRT reduction = 0.652828
+min new LRT = 1015.501011
+N new LRT > 9.21 = 34/34
+N new LRT > 1000 = 34/34
+N new LRT > 10000 = 24/34
+
+tail: median I0=54230.324357, median I1=0.004733, median fractional LRT reduction=0.596714
+control: median I0=46496.639884, median I1=0.148658, median fractional LRT reduction=0.682090
