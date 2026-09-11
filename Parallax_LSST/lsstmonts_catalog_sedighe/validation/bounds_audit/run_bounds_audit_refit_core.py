@@ -2036,6 +2036,9 @@ def run_event(
         "sample":
             meta["sample"],
 
+        "input_manifest":
+            str(MANIFEST_PATH),
+
         "bounds_profile":
             BOUNDS_PROFILE,
 
@@ -2141,6 +2144,16 @@ parser.add_argument(
 )
 
 parser.add_argument(
+    "--manifest",
+    type=Path,
+    default=None,
+    help=(
+        "Explicit event manifest. If omitted, use the historical "
+        "34-event bounds-audit manifest."
+    ),
+)
+
+parser.add_argument(
     "--bounds-profile",
     choices=[
         "audit_legacy",
@@ -2172,8 +2185,24 @@ args = parser.parse_args()
 
 BOUNDS_PROFILE = args.bounds_profile
 
+MANIFEST_PATH = (
+    Path(args.manifest).expanduser().resolve()
+    if args.manifest is not None
+    else Path(MANIFEST).expanduser().resolve()
+)
+
+if not MANIFEST_PATH.exists():
+    raise FileNotFoundError(
+        f"Manifest not found: {MANIFEST_PATH}"
+    )
+
+print(
+    "manifest         =",
+    MANIFEST_PATH,
+)
+
 manifest = pd.read_csv(
-    MANIFEST
+    MANIFEST_PATH
 )
 
 selected = manifest[

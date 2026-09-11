@@ -59,6 +59,16 @@ def build_parser():
     )
 
     p.add_argument(
+        "--manifest",
+        type=Path,
+        default=None,
+        help=(
+            "Explicit event manifest. If omitted, use the historical "
+            "34-event bounds-audit manifest."
+        ),
+    )
+
+    p.add_argument(
         "--bounds-profile",
         choices=[
             "audit_legacy",
@@ -268,6 +278,25 @@ def main():
         "--bounds-profile",
         str(args.bounds_profile),
     ]
+
+    if args.manifest is not None:
+        manifest_path = (
+            args.manifest
+            .expanduser()
+            .resolve()
+        )
+
+        if not manifest_path.exists():
+            raise FileNotFoundError(
+                f"Manifest not found: {manifest_path}"
+            )
+
+        cmd.extend(
+            [
+                "--manifest",
+                str(manifest_path),
+            ]
+        )
 
     if args.dry_run:
         cmd.append(
