@@ -139,3 +139,37 @@ information for:
 - z-scores and empirical coverage;
 - multimodality diagnostics from the multistart solutions;
 - targeted profile likelihood analysis of problematic subsets.
+
+
+## Result: 34-event reference5000 validation
+
+The cross-seeded reference5000 validation was completed on the original
+34-event tail/control diagnostic sample.
+
+Results:
+
+- N events: 34
+- reference5000 refits worse than the best previously known feasible
+  H0 minimum by Delta chi2 > 0.1: 0/34
+- maximum refit-minus-preexisting Delta chi2:
+  1.09139364e-11
+- events with a known better H0 solution outside reference5000 by
+  Delta chi2 > 0.1: 0/34
+- maximum pooled reference5000-minus-historical-domain Delta chi2: 0
+- pooled H0 winners at or near a physical reference5000 bound: 0/34
+
+The previously problematic event catalog_row=83085 recovers the known
+historical H0 solution with tE approximately 2890.63 d inside the
+reference5000 domain.
+
+Conclusion:
+
+    reference5000 is accepted as the shared-parameter reference domain
+    for the 34-event bounds validation sample.
+
+This does not yet establish final production bounds. The next required
+test is the independently selected 100-event extreme-parameter sample.
+
+The H1 optimization/bounds problem remains a separate validation task.
+Several reference5000 runs found H1 minima below the original production
+H1 minimum, which matters for both the LRT and parameter characterization.

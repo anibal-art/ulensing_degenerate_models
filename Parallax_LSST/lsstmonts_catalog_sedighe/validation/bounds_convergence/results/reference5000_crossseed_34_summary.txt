@@ -1,0 +1,11 @@
+N = 34
+
+OPTIMIZER / CROSS-SEED CHECK
+N reference5000 refit worse than known feasible minimum by >0.1 = 0
+max(refit - preexisting) = 1.09139364e-11
+
+DOMAIN CHECK
+N with known better solution outside reference5000 by >0.1 = 0
+max(reference5000 - historical) = 0
+
+N pooled reference winners at/near a physical bound = 0
