@@ -59,6 +59,22 @@ def build_parser():
     )
 
     p.add_argument(
+        "--bounds-profile",
+        choices=[
+            "audit_legacy",
+            "moderate",
+            "candidate",
+            "wide",
+            "reference5000",
+            "stress",
+        ],
+        default="audit_legacy",
+        help=(
+            "Truth-independent physical-bounds profile."
+        ),
+    )
+
+    p.add_argument(
         "--work-root",
         type=Path,
         default=None,
@@ -249,6 +265,8 @@ def main():
         str(runtime),
         "--catalog-row",
         str(args.catalog_row),
+        "--bounds-profile",
+        str(args.bounds_profile),
     ]
 
     if args.dry_run:

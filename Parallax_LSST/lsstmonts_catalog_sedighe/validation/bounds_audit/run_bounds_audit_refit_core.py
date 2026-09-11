@@ -656,47 +656,133 @@ OPTIMIZER_OPTIONS = copy.deepcopy(
     CONFIG["fit"]["optimizer_options"]
 )
 
-# ONLY CHANGE WITH RESPECT TO PRODUCTION:
+# ============================================================
+# TRUTH-INDEPENDENT BOUNDS PROFILES
+# ============================================================
 #
-#       1e-7 < rho < 10
+# audit_legacy:
+#     Exact broad physical domain used by the historical
+#     34-event bounds audit. Kept for reproducibility.
 #
-WIDE_RHO = {
-    "type": "relative",
-    "frac": 1.0e6,
-    "lower": 1.0e-7,
-    "upper": 10.0,
-    "min_width": 1.0e-7,
+# moderate / wide / stress:
+#     Nested truth-independent domains used for the bounds
+#     convergence experiment.
+#
+# t0 is NOT specified here. It is set later, independently for
+# every event, to the full temporal range of the actual fitted
+# Rubin photometry:
+#
+#     t_min <= t0 <= t_max
+#
+# ============================================================
+
+BOUNDS_PROFILES = {
+
+    "audit_legacy": {
+        "u0": [-5.0, 5.0],
+        "tE": [0.1, 20000.0],
+        "rho": [1.0e-7, 10.0],
+
+        # Historical audit kept the production piE bounds.
+        "piEN": None,
+        "piEE": None,
+    },
+
+    "moderate": {
+        "u0": [-2.0, 2.0],
+        "tE": [0.1, 750.0],
+        "rho": [1.0e-7, 1.0],
+        "piEN": [-10.0, 10.0],
+        "piEE": [-10.0, 10.0],
+    },
+
+    "candidate": {
+        "u0": [-2.0, 2.0],
+        "tE": [0.1, 750.0],
+        "rho": [1.0e-7, 2.0],
+        "piEN": [-10.0, 10.0],
+        "piEE": [-10.0, 10.0],
+    },
+
+    "wide": {
+        "u0": [-3.0, 3.0],
+        "tE": [0.1, 1000.0],
+        "rho": [1.0e-7, 2.0],
+        "piEN": [-15.0, 15.0],
+        "piEE": [-15.0, 15.0],
+    },
+
+    "reference5000": {
+        "u0": [-5.0, 5.0],
+        "tE": [0.1, 5000.0],
+        "rho": [1.0e-7, 5.0],
+        "piEN": [-20.0, 20.0],
+        "piEE": [-20.0, 20.0],
+    },
+
+    "stress": {
+        "u0": [-5.0, 5.0],
+        "tE": [0.1, 2000.0],
+        "rho": [1.0e-7, 5.0],
+        "piEN": [-20.0, 20.0],
+        "piEE": [-20.0, 20.0],
+    },
 }
 
-# ============================================================
-# TRUTH-INDEPENDENT PHYSICAL BOUNDS
-# ============================================================
-#
-# t0 is set later from the actual fitted photometry:
-#     [t_min, t_max]
-#
-# These three are absolute and identical for H0 and H1.
-# ============================================================
 
-for _bounds in [
-    H0_BOUNDS,
-    H1_BOUNDS,
-]:
+# Default preserves historical behavior.
+BOUNDS_PROFILE = "audit_legacy"
 
-    _bounds["u0"] = [
-        -5.0,
-        5.0,
-    ]
 
-    _bounds["tE"] = [
-        0.1,
-        20000.0,
-    ]
+def apply_bounds_profile(
+    bounds,
+    *,
+    h1,
+    profile,
+):
 
-    _bounds["rho"] = [
-        1.0e-7,
-        10.0,
-    ]
+    if profile not in BOUNDS_PROFILES:
+        raise ValueError(
+            f"Unknown bounds profile: {profile!r}"
+        )
+
+    spec = BOUNDS_PROFILES[profile]
+
+    out = copy.deepcopy(bounds)
+
+    # Shared H0/H1 nuisance-parameter domain.
+    out["u0"] = list(spec["u0"])
+    out["tE"] = list(spec["tE"])
+    out["rho"] = list(spec["rho"])
+
+    # Alternative-only parallax domain.
+    #
+    # For audit_legacy, None means preserve the original
+    # production parallax bounds exactly.
+    if h1:
+
+        if spec["piEN"] is not None:
+            out["piEN"] = list(spec["piEN"])
+
+        if spec["piEE"] is not None:
+            out["piEE"] = list(spec["piEE"])
+
+    return out
+
+
+def bounds_output_root():
+
+    # Preserve the exact historical output layout for the
+    # original audit.
+    if BOUNDS_PROFILE == "audit_legacy":
+        return OUT
+
+    return (
+        OUT
+        / "bounds_convergence"
+        / BOUNDS_PROFILE
+    )
+
 
 # Common rho starts.
 # The old fitted rho and truth rho are added separately.
@@ -1078,6 +1164,203 @@ def h1_anchors(meta):
     return anchors
 
 
+
+# ============================================================
+# OPTIONAL H0 CROSS-SEEDS FOR BOUNDS VALIDATION
+# ============================================================
+
+def load_h0_crossseeds(meta):
+    """
+    Load diagnostic H0 starts discovered in previous validation fits.
+
+    These starts are used only when the environment variable
+
+        HIDDEN_PARALLAX_H0_CROSSSEED_MANIFEST
+
+    is defined.
+
+    This is a validation tool, not a production initialization
+    strategy. It is designed to separate parameter-domain
+    convergence from optimizer-basin effects.
+    """
+
+    text = os.environ.get(
+        "HIDDEN_PARALLAX_H0_CROSSSEED_MANIFEST",
+        "",
+    ).strip()
+
+    if not text:
+        return []
+
+    path = Path(
+        text
+    ).expanduser()
+
+    if not path.exists():
+        raise FileNotFoundError(
+            f"H0 cross-seed manifest not found: {path}"
+        )
+
+    df = pd.read_csv(
+        path
+    )
+
+    required = {
+        "catalog_row",
+        "sample",
+        "source_profile",
+        "source_label",
+        "source_chi2",
+        "t0",
+        "u0",
+        "tE",
+        "rho",
+    }
+
+    missing = (
+        required
+        - set(df.columns)
+    )
+
+    if missing:
+        raise RuntimeError(
+            "Cross-seed manifest missing columns: "
+            + repr(sorted(missing))
+        )
+
+    x = df[
+        (
+            df["catalog_row"].astype(int)
+            == int(meta["row"])
+        )
+        & (
+            df["sample"].astype(str)
+            == str(meta["sample"])
+        )
+    ].copy()
+
+    if len(x) == 0:
+        return []
+
+    # Data-driven t0 range, identical to run_one_fit().
+    all_times = []
+
+    for band in [
+        "u",
+        "g",
+        "r",
+        "i",
+        "z",
+        "y",
+    ]:
+
+        lc = meta["curves"][band]
+
+        if len(lc):
+            all_times.extend(
+                np.asarray(
+                    lc[:, 0],
+                    dtype=float,
+                ).tolist()
+            )
+
+    if len(all_times) == 0:
+        raise RuntimeError(
+            "Cannot validate H0 cross-seeds: "
+            "no Rubin times."
+        )
+
+    t_min = float(
+        np.min(all_times)
+    )
+
+    t_max = float(
+        np.max(all_times)
+    )
+
+    spec = BOUNDS_PROFILES[
+        BOUNDS_PROFILE
+    ]
+
+    starts = []
+
+    for _, r in x.sort_values(
+        "source_chi2"
+    ).iterrows():
+
+        initial = {
+            "t0": float(r["t0"]),
+            "u0": float(r["u0"]),
+            "tE": float(r["tE"]),
+            "rho": float(r["rho"]),
+        }
+
+        if not all(
+            np.isfinite(
+                list(
+                    initial.values()
+                )
+            )
+        ):
+            continue
+
+        violations = []
+
+        if not (
+            t_min
+            <= initial["t0"]
+            <= t_max
+        ):
+            violations.append("t0")
+
+        for p in [
+            "u0",
+            "tE",
+            "rho",
+        ]:
+
+            lo, hi = spec[p]
+
+            if not (
+                lo
+                <= initial[p]
+                <= hi
+            ):
+                violations.append(p)
+
+        if violations:
+
+            print(
+                "SKIP H0 cross-seed outside current domain:",
+                r["source_profile"],
+                r["source_label"],
+                "violations=",
+                violations,
+            )
+
+            continue
+
+        label = (
+            "crossseed_"
+            + str(
+                r["source_profile"]
+            )
+            + "_"
+            + str(
+                r["source_label"]
+            )
+        )
+
+        starts.append(
+            (
+                label,
+                initial,
+            )
+        )
+
+    return starts
+
+
 # ============================================================
 # ONE FIT
 # ============================================================
@@ -1097,6 +1380,12 @@ def run_one_fit(
         H1_BOUNDS
         if h1
         else H0_BOUNDS
+    )
+
+    bounds = apply_bounds_profile(
+        bounds,
+        h1=h1,
+        profile=BOUNDS_PROFILE,
     )
 
     # ========================================================
@@ -1152,7 +1441,7 @@ def run_one_fit(
     }
 
     fit_dir = (
-        OUT
+        bounds_output_root()
         / meta["sample"]
         / str(meta["row"])
         / hypothesis
@@ -1172,6 +1461,7 @@ def run_one_fit(
     record = {
         "sample": meta["sample"],
         "catalog_row": meta["row"],
+        "bounds_profile": BOUNDS_PROFILE,
         "hypothesis": hypothesis,
         "label": label,
         "status": "failed",
@@ -1362,6 +1652,20 @@ def run_event(
     print("=" * 100)
 
     print(
+        "bounds profile =",
+        BOUNDS_PROFILE,
+    )
+
+    print(
+        "bounds profile spec =",
+        BOUNDS_PROFILES[
+            BOUNDS_PROFILE
+        ],
+    )
+
+    print()
+
+    print(
         "old H0 chi2 =",
         meta["old_h0_chi2"],
     )
@@ -1444,6 +1748,62 @@ def run_event(
                     },
                 )
             )
+
+
+    # --------------------------------------------------------
+    # H0 validation cross-seeds.
+    #
+    # These are exact previously discovered solutions and are
+    # deliberately NOT crossed with RHO_GRID.
+    # --------------------------------------------------------
+
+    crossseed_starts = load_h0_crossseeds(
+        meta
+    )
+
+    n_h0_crossseeds_added = 0
+
+    for label, initial in crossseed_starts:
+
+        key = (
+            round(
+                float(initial["t0"]),
+                5,
+            ),
+            round(
+                float(initial["u0"]),
+                6,
+            ),
+            round(
+                float(initial["tE"]),
+                5,
+            ),
+            round(
+                float(initial["rho"]),
+                8,
+            ),
+        )
+
+        if key in h0_seen:
+            continue
+
+        h0_seen.add(
+            key
+        )
+
+        h0_starts.append(
+            (
+                label,
+                initial,
+            )
+        )
+
+        n_h0_crossseeds_added += 1
+
+    print(
+        "H0 validation cross-seeds added =",
+        n_h0_crossseeds_added,
+    )
 
     # --------------------------------------------------------
     # H1:
@@ -1594,7 +1954,7 @@ def run_event(
     )
 
     event_out = (
-        OUT
+        bounds_output_root()
         / meta["sample"]
         / str(meta["row"])
     )
@@ -1676,6 +2036,16 @@ def run_event(
         "sample":
             meta["sample"],
 
+        "bounds_profile":
+            BOUNDS_PROFILE,
+
+        "bounds_profile_spec":
+            copy.deepcopy(
+                BOUNDS_PROFILES[
+                    BOUNDS_PROFILE
+                ]
+            ),
+
         "catalog_row":
             meta["row"],
 
@@ -1718,6 +2088,15 @@ def run_event(
 
         "n_h0_starts":
             len(h0_starts),
+
+        "n_h0_crossseeds_added":
+            n_h0_crossseeds_added,
+
+        "h0_crossseed_manifest":
+            os.environ.get(
+                "HIDDEN_PARALLAX_H0_CROSSSEED_MANIFEST",
+                None,
+            ),
 
         "n_h1_anchors":
             len(anchors),
@@ -1762,6 +2141,24 @@ parser.add_argument(
 )
 
 parser.add_argument(
+    "--bounds-profile",
+    choices=[
+        "audit_legacy",
+        "moderate",
+        "candidate",
+        "wide",
+        "reference5000",
+        "stress",
+    ],
+    default="audit_legacy",
+    help=(
+        "Truth-independent physical-bounds profile. "
+        "Default audit_legacy preserves the historical "
+        "34-event audit."
+    ),
+)
+
+parser.add_argument(
     "--dry-run",
     action="store_true",
 )
@@ -1772,6 +2169,8 @@ parser.add_argument(
 )
 
 args = parser.parse_args()
+
+BOUNDS_PROFILE = args.bounds_profile
 
 manifest = pd.read_csv(
     MANIFEST
@@ -1795,7 +2194,7 @@ sample = str(
 )
 
 summary_path = (
-    OUT
+    bounds_output_root()
     / sample
     / str(args.catalog_row)
     / "summary.json"
