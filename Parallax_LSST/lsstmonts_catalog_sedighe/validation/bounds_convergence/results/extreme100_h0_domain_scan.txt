@@ -1,0 +1,22 @@
+N = 100
+chi2 tolerance = 0.1
+
+RAW NESTED-DOMAIN CHECK
+N raw optimizer inversions (control worse than reference by >0.1) = 13
+min(raw ref-control) = -30.434165
+max(raw ref-control) = 1250.59677
+
+POOLED DOMAIN CHECK
+N known reference5000 domain losses >0.1 = 1
+max(pooled reference-control) = 101.93152
+
+OPTIMIZER CHECK
+N reference5000 optimizer gaps >0.1 = 12
+N control20000 optimizer gaps >0.1 = 13
+
+BOUNDARY CHECK
+N pooled reference winners near a reference bound = 1
+
+CROSS-SEED CLOSURE
+N events requiring second-pass closure = 26
+N cross-seeds written = 27
