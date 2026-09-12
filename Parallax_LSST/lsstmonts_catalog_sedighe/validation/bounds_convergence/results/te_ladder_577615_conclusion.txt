@@ -1,0 +1,29 @@
+Event 577615 H0 tE-bound convergence test
+
+The H0 optimum follows the upper tE bound for:
+  5000 d
+  20000 d
+  50000 d
+  100000 d
+
+With tE_max = 500000 d, the optimum becomes interior:
+  tE = 140884.93 d
+  chi2 = 33905.480289
+
+With tE_max = 1000000 d:
+  tE = 142852.71 d
+  chi2 = 33905.476495
+
+Difference:
+  chi2(500000) - chi2(1000000) = 0.003794
+
+This is well below the adopted convergence tolerance Delta chi2 = 0.1.
+
+Conclusion:
+The event has a finite very-long-timescale H0 pseudo-solution.
+A fixed tE_max = 5000 d is not universally safe for H0.
+Use a standard domain followed by automatic tE-bound escalation when
+the H0 winner is near the upper tE boundary.
+
+This test concerns H0/shared nuisance bounds only. H1 optimization and
+parallax bounds require independent validation.
