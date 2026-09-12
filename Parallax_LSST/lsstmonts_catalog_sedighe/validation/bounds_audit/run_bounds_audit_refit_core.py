@@ -720,6 +720,14 @@ BOUNDS_PROFILES = {
         "piEE": [-20.0, 20.0],
     },
 
+    "control20000": {
+        "u0": [-10.0, 10.0],
+        "tE": [0.1, 20000.0],
+        "rho": [1.0e-7, 10.0],
+        "piEN": [-20.0, 20.0],
+        "piEE": [-20.0, 20.0],
+    },
+
     "stress": {
         "u0": [-5.0, 5.0],
         "tE": [0.1, 2000.0],
@@ -732,6 +740,7 @@ BOUNDS_PROFILES = {
 
 # Default preserves historical behavior.
 BOUNDS_PROFILE = "audit_legacy"
+FIT_SCOPE = "both"
 
 
 def apply_bounds_profile(
@@ -772,15 +781,25 @@ def apply_bounds_profile(
 
 def bounds_output_root():
 
-    # Preserve the exact historical output layout for the
-    # original audit.
-    if BOUNDS_PROFILE == "audit_legacy":
+    # Preserve the exact historical layout for the original
+    # full H0+H1 audit.
+    if (
+        BOUNDS_PROFILE == "audit_legacy"
+        and FIT_SCOPE == "both"
+    ):
         return OUT
+
+    profile_dir = BOUNDS_PROFILE
+
+    if FIT_SCOPE != "both":
+        profile_dir = (
+            f"{BOUNDS_PROFILE}_{FIT_SCOPE}only"
+        )
 
     return (
         OUT
         / "bounds_convergence"
-        / BOUNDS_PROFILE
+        / profile_dir
     )
 
 
@@ -1899,55 +1918,59 @@ def run_event(
 
     results = []
 
-    print()
-    print("RUN H0")
+    if FIT_SCOPE in ("both", "h0"):
 
-    for i, (label, initial) in enumerate(
-        h0_starts,
-        1,
-    ):
+        print()
+        print("RUN H0")
 
-        r = run_one_fit(
-            meta,
-            "H0",
-            initial,
-            label,
-        )
+        for i, (label, initial) in enumerate(
+            h0_starts,
+            1,
+        ):
 
-        results.append(r)
+            r = run_one_fit(
+                meta,
+                "H0",
+                initial,
+                label,
+            )
 
-        print(
-            f"H0 {i:02d}/{len(h0_starts):02d}",
-            r["status"],
-            f"chi2={r['chi2']}",
-            label,
-            flush=True,
-        )
+            results.append(r)
 
-    print()
-    print("RUN H1")
+            print(
+                f"H0 {i:02d}/{len(h0_starts):02d}",
+                r["status"],
+                f"chi2={r['chi2']}",
+                label,
+                flush=True,
+            )
 
-    for i, (label, initial) in enumerate(
-        h1_starts,
-        1,
-    ):
+    if FIT_SCOPE in ("both", "h1"):
 
-        r = run_one_fit(
-            meta,
-            "H1",
-            initial,
-            label,
-        )
+        print()
+        print("RUN H1")
 
-        results.append(r)
+        for i, (label, initial) in enumerate(
+            h1_starts,
+            1,
+        ):
 
-        print(
-            f"H1 {i:02d}/{len(h1_starts):02d}",
-            r["status"],
-            f"chi2={r['chi2']}",
-            label,
-            flush=True,
-        )
+            r = run_one_fit(
+                meta,
+                "H1",
+                initial,
+                label,
+            )
+
+            results.append(r)
+
+            print(
+                f"H1 {i:02d}/{len(h1_starts):02d}",
+                r["status"],
+                f"chi2={r['chi2']}",
+                label,
+                flush=True,
+            )
 
     df = pd.DataFrame(
         results
@@ -2039,6 +2062,9 @@ def run_event(
         "input_manifest":
             str(MANIFEST_PATH),
 
+        "fit_scope":
+            FIT_SCOPE,
+
         "bounds_profile":
             BOUNDS_PROFILE,
 
@@ -2091,6 +2117,20 @@ def run_event(
 
         "n_h0_starts":
             len(h0_starts),
+
+        "n_h0_fits_executed":
+            int(
+                (
+                    df["hypothesis"] == "H0"
+                ).sum()
+            ),
+
+        "n_h1_fits_executed":
+            int(
+                (
+                    df["hypothesis"] == "H1"
+                ).sum()
+            ),
 
         "n_h0_crossseeds_added":
             n_h0_crossseeds_added,
@@ -2161,6 +2201,7 @@ parser.add_argument(
         "candidate",
         "wide",
         "reference5000",
+        "control20000",
         "stress",
     ],
     default="audit_legacy",
@@ -2168,6 +2209,21 @@ parser.add_argument(
         "Truth-independent physical-bounds profile. "
         "Default audit_legacy preserves the historical "
         "34-event audit."
+    ),
+)
+
+parser.add_argument(
+    "--fit-scope",
+    choices=[
+        "both",
+        "h0",
+        "h1",
+    ],
+    default="both",
+    help=(
+        "Which hypothesis to refit. Default 'both' preserves "
+        "historical behavior. Use 'h0' for shared-bounds "
+        "validation without rerunning expensive H1 fits."
     ),
 )
 
@@ -2184,6 +2240,7 @@ parser.add_argument(
 args = parser.parse_args()
 
 BOUNDS_PROFILE = args.bounds_profile
+FIT_SCOPE = args.fit_scope
 
 MANIFEST_PATH = (
     Path(args.manifest).expanduser().resolve()

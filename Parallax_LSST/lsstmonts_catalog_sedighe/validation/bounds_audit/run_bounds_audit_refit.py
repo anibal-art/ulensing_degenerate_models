@@ -76,11 +76,25 @@ def build_parser():
             "candidate",
             "wide",
             "reference5000",
+            "control20000",
             "stress",
         ],
         default="audit_legacy",
         help=(
             "Truth-independent physical-bounds profile."
+        ),
+    )
+
+    p.add_argument(
+        "--fit-scope",
+        choices=[
+            "both",
+            "h0",
+            "h1",
+        ],
+        default="both",
+        help=(
+            "Which hypothesis to refit. Default: both."
         ),
     )
 
@@ -277,6 +291,8 @@ def main():
         str(args.catalog_row),
         "--bounds-profile",
         str(args.bounds_profile),
+        "--fit-scope",
+        str(args.fit_scope),
     ]
 
     if args.manifest is not None:

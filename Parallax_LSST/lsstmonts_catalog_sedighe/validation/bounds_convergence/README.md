@@ -173,3 +173,65 @@ test is the independently selected 100-event extreme-parameter sample.
 The H1 optimization/bounds problem remains a separate validation task.
 Several reference5000 runs found H1 minima below the original production
 H1 minimum, which matters for both the LRT and parameter characterization.
+
+
+## Extreme100 shared H0-domain validation
+
+After the 34-event reference5000 closure test, the shared H0 nuisance
+domain is tested on an independent 100-event sample selected to stress:
+
+- large tE;
+- large rho;
+- large u0;
+- large piE;
+- events just outside the original H1 piE box.
+
+The sample contains 20 unique events from each category.
+
+For this validation only, H0 is refitted. H1 is not rerun because the
+question here is exclusively whether the shared nuisance domain
+(t0, u0, tE, rho) is sufficiently broad.
+
+The two nested H0 domains are:
+
+reference5000:
+    t0  = full observed Rubin time range
+    u0  = [-5, 5]
+    tE  = [0.1, 5000] d
+    rho = [1e-7, 5]
+
+control20000:
+    t0  = full observed Rubin time range
+    u0  = [-10, 10]
+    tE  = [0.1, 20000] d
+    rho = [1e-7, 10]
+
+Because reference5000 is contained in control20000, the exact minima must
+satisfy
+
+    chi2_control <= chi2_reference.
+
+Independent TRF runs need not respect this ordering because they may
+converge to different basins. Therefore the analysis pools all successful
+solutions from both domains and computes:
+
+1. the best solution feasible in reference5000;
+2. the best solution feasible in control20000.
+
+The pooled difference
+
+    Delta chi2_domain =
+        chi2_pooled_reference5000
+        - chi2_pooled_control20000
+
+is non-negative by construction.
+
+A value larger than 0.1 is treated as evidence that reference5000 excludes
+a currently known better H0 solution.
+
+Independent-run differences larger than 0.1 are treated as optimizer
+diagnostics rather than bound evidence.
+
+Events with a domain or optimizer discrepancy larger than 0.1 are then
+cross-seeded in a second pass. Cross-seeding is a validation device only
+and is not a proposed production initialization strategy.
