@@ -77,6 +77,7 @@ def build_parser():
             "wide",
             "reference5000",
             "control20000",
+            "te1000000",
             "te5000",
             "te50000",
             "te100000",

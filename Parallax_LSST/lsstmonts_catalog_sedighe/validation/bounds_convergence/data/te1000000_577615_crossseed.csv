@@ -1,0 +1,2 @@
+catalog_row,sample,source_profile,source_label,source_chi2,t0,u0,tE,rho,source_file
+577615,extreme100,te500000,truth_rho_0.0001,33905.480289004394,2463647.2159807687,-6.243161634986107e-05,140884.9276277865,8.639050878780936e-05,/home/anibal-pc/Downloads/hidden_parallax/hidden_parallax_refit_test/refits/bounds_convergence/te500000_h0only/extreme100/577615/all_refits.csv
