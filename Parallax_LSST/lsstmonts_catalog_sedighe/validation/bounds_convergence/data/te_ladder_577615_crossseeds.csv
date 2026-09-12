@@ -1,0 +1,3 @@
+catalog_row,sample,source_profile,source_label,source_chi2,t0,u0,tE,rho,source_file
+577615,extreme100,reference5000,old_H0_rho_1e-06,34014.146048783776,2463647.2165143327,-0.0017599424970176,4999.999999971705,0.0024346788820703,/home/anibal-pc/Downloads/hidden_parallax/hidden_parallax_refit_test/refits/bounds_convergence/reference5000_h0only/extreme100/577615/all_refits.csv
+577615,extreme100,control20000,crossseed_control20000_old_H0_rho_0.01,33912.21452861664,2463647.2160103004,0.0004397948989843,19999.999999999956,0.0006085618356635,/home/anibal-pc/Downloads/hidden_parallax/hidden_parallax_refit_test/refits/bounds_convergence/control20000_h0only/extreme100/577615/all_refits.csv
