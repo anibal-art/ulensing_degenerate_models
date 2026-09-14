@@ -516,6 +516,383 @@ candidates).
 
 ---
 
+### Experiment A1 — Sequential H0 stopping diagnostics (DIAGNOSTIC BASELINE)
+
+**Status: DIAGNOSTIC BASELINE.** This experiment characterizes
+predictors; it does not propose or freeze any production stopping
+rule or rescue trigger. No conclusion here authorizes reducing the
+18-fit `gate1_final18` plan.
+
+**1. Question**
+
+Using only observables available from a sequential run of
+`gate1_final18`'s own fixed 18-start plan, which predictors,
+computed after each partial step k=1..18, are associated with the
+running-best H0 solution still being more than 0.1 above the Gate-1
+oracle? Separately: does operationalizing the checkpoint's validated
+t0-rescue rule directly from the full-18-fit winner's own
+`optimizer_active_mask` (rather than from a hardcoded event id)
+correctly reproduce the checkpoint's result that only one
+`extreme100` event needed it?
+
+**2. Motivation**
+
+This is the concrete first step toward a cheaper adaptive H0
+strategy (checkpoint §22 / this document §0.2): before designing any
+trigger, characterize empirically which signals available mid-run
+actually correlate with "still wrong", without presupposing the
+answer, and without smuggling in any oracle-derived or per-event
+hardcoded information.
+
+**3. Inputs**
+
+- `results/gate1_oracle_diagnostics.csv`, sources
+  `gate1_final18_base_t0margin0`, `gate1_final18_rescue_t0margin0.25`
+  (both from Experiment 0, unmodified) and `gate1_oracle_52` (used
+  only for offline labeling — see §5).
+- New script:
+  `validation/bounds_convergence/analyze_a1_sequential_h0_diagnostics.py`.
+
+**4. Method**
+
+*Sequence order (a stated A1 convention, not a validated production
+order):* `gate1_final18` was historically run as four independent
+per-mode multistarts, not one interleaved sequence. A1 concatenates
+the four modes in the fixed order `physical, log_te, log_rho,
+log_te_rho` and, within each mode, uses that mode's own `start_slot`
+order — giving a global `sequence_index` 1..18 that is identical for
+every event (guaranteed by the Experiment-0 result that
+`(mode, start_slot) -> strategy_id` is constant across all 100 events
+for this source). This is an explicit, documented choice for A1, not
+a claim that this is the best order — Phase B is free to study
+others.
+
+*Per-step predictors (k=1..18, using only fits 1..k):* running best
+chi2 (`chi2_best_k`), `delta_spread_k = chi2_second_best_k -
+chi2_best_k` (undefined at k=1), `n_modes_seen_k`,
+`n_modes_agreeing_k` (number of modes whose own best-so-far chi2 is
+within 0.1 of the global best-so-far — a cross-coordinate-system
+agreement proxy), `steps_since_improvement_k` (how many consecutive
+recent steps failed to lower the running best), the winning row's
+`optimizer_active_mask` split into `t0/u0/tE/rho_active_k`, its
+`optimizer_success_k` / `optimizer_optimality_k`, and best-vs-second-best
+parameter differences (`diff_t0_best2nd_k`, `diff_u0_best2nd_k`,
+`absdiff_log10_tE_best2nd_k`, `absdiff_log10_rho_best2nd_k`).
+
+*Offline-only labels:* `chi2_oracle_52` (pooled minimum over the
+52-fit oracle for that event), `delta_chi2_vs_oracle_k = chi2_best_k
+- chi2_oracle_52`, `fail_k = delta_chi2_vs_oracle_k > 0.1`. These are
+never inputs to any predictor computation.
+
+*Full-18 policy, rescue operationalized from active_mask:* for each
+event, take the winner of all 18 base-plan fits; parse ITS
+`optimizer_active_mask`; if and only if its `t0` component is active,
+look up that same event's `gate1_final18_rescue_t0margin0.25` 18
+fits, take their winner, and set the policy chi2 to the minimum of
+the two winners (else the policy chi2 is just the base-18 winner).
+Per the explicit instruction for this experiment, **the rescue is
+applied only at the full k=18 boundary** — no rescue of any kind is
+applied for k<18, even if a partial winner already shows an active
+t0 bound; testing an earlier trigger point is explicitly left to
+Phase B as a new, separately-evaluated policy.
+
+**5. Information allowed in production**
+
+Per-step predictors use only fields already present in
+`gate1_oracle_diagnostics.csv` for fits 1..k of the event's own base
+run (chi2, t0/u0/tE/rho, `optimizer_success`, `optimizer_optimality`,
+`optimizer_active_mask`, mode) — exactly what a real sequential run
+would have on hand after k starts. `catalog_row` is read only to
+group rows by event and to join the rescue table; it is never used
+as a condition in the rescue rule or in any predictor (in particular,
+`catalog_row==36103` never appears as a rule anywhere in the script —
+the single rescued event emerges from the active-mask condition, see
+§7). `chi2_oracle_52` and everything derived from it
+(`delta_chi2_vs_oracle_k`, `fail_k`) are strictly offline-only
+evaluation labels.
+
+**Terminology: two distinct reference objects, never call both
+"the oracle" unqualified.**
+
+1. **Base-domain oracle, `chi2_oracle_52`.** The pooled minimum over
+   the 52-fit oracle, all of it computed at `t0_margin_factor=0`. This
+   is the correct and only reference for evaluating the k=1..18 base
+   sequence (`delta_chi2_vs_oracle_k`, `fail_k`, the `N(fail_k)` by k
+   table), because every one of those base-plan fits also shares
+   `t0_margin_factor=0` — comparing like domains to like domains.
+2. **Final validated H0 reference (the policy itself, not a wider
+   oracle).** The base-18 winner, with the checkpoint's t0 rescue
+   applied on top of it when that winner's own `active_mask` shows
+   `t0` active (§4, operationalized from `optimizer_active_mask`, not
+   from `catalog_row`). This reference can legitimately explore
+   `t0_margin_factor=0.25` for the one event it rescues.
+   `delta_chi2_vs_oracle_final` therefore compares object 2 (the final
+   policy, domain-mixed by construction for the rescued event) against
+   object 1 (the base-domain oracle, always `t0_margin_factor=0`). For
+   `catalog_row=36103` this is precisely why
+   `delta_chi2_vs_oracle_final < 0` is expected and correct, not an
+   inconsistency: the final policy is allowed to use a strictly wider
+   `t0` domain than `chi2_oracle_52` was ever computed in, for that
+   one event. `chi2_oracle_52` is not, and was never intended to be, a
+   `t0_margin=0.25` oracle. **Phase B must keep these two references
+   separate**: any k=1..18 per-step predictor analysis must compare
+   against the base-domain oracle only (object 1); only a genuine
+   final-policy comparison (object 2, after any rescue this
+   experiment or Phase B applies) may legitimately see negative
+   deltas for rescued events.
+
+**6. Metrics**
+
+`N(fail_k)` by k; empirical `P(fail_k | predictor bucket)` per
+predictor (pooled over all 1800 `(catalog_row, k)` pairs); the
+full-18-policy `N(fail_final)`, max `delta_chi2_vs_oracle_final`, and
+the identity/count of rescued events (checked against, not derived
+from, the checkpoint's `catalog_row=36103` statement).
+
+**7. Result**
+
+Ran `analyze_a1_sequential_h0_diagnostics.py` (100 events x 18 steps
+= 1800 per-step rows).
+
+*Full-18 policy, rescue from active_mask alone:* exactly **1** event
+had an active `t0` bound on its base-18 winner —
+`catalog_row=36103` — matching the checkpoint's statement (§6 of
+`VALIDATION_STATUS_2026-09-14.md`) without that event id ever being
+read by the script. After applying the rescue for that one event,
+`N(fail_final, delta>0.1) = 0` and `max(delta_chi2_vs_oracle_final) =
+0.0271387`, reproducing the checkpoint's Gate-1 result. This does
+**not** mean `delta_chi2_vs_oracle_final` is exactly `0` for all 100
+events — full distribution, read directly from
+`a1_sequential_h0_full18_policy.csv`:
+
+| min | median | max | N(delta>0) | N(delta>1e-6) | N(delta>0.01) | N(delta>0.1) |
+|---:|---:|---:|---:|---:|---:|---:|
+| -6.586858 | 0.000000 | 0.027139 | 22 | 20 | 5 | **0** |
+
+The minimum is negative (`catalog_row=36103`, the rescued event) by
+construction, per the base-domain-oracle vs. final-policy distinction
+in §5 above: its `t0_margin=0.25` rescue chi2 is compared against
+`chi2_oracle_52`, the **base-domain** (`t0_margin_factor=0`) oracle,
+which never explored the wider rescue domain for that event — a
+negative delta here reflects the final policy legitimately using a
+wider `t0` domain than the base-domain oracle, not an error, and not
+evidence that `chi2_oracle_52` is somehow wrong. The 5 events with
+`delta_chi2_vs_oracle_final > 0.01` (all still `< 0.1`, so all still
+pass the adopted tolerance) are:
+
+| catalog_row | chi2_policy_final | chi2_oracle_52 | delta |
+|---:|---:|---:|---:|
+| 71949 | 1486.571357 | 1486.554579 | 0.016777 |
+| 81185 | 3289.732938 | 3289.722289 | 0.010648 |
+| 81449 | 397.352111 | 397.332558 | 0.019553 |
+| 557806 | 447.776362 | 447.755102 | 0.021261 |
+| 567691 | 324.894979 | 324.867840 | 0.027139 |
+
+The correct summary is therefore **0 events with `delta_chi2 > 0.1`
+but `max delta_chi2 ≈ 0.0271387` (not 0)**. The breakdown behind
+`N(delta>0)=22`: for the 99 non-rescued events, `chi2_policy_final =
+chi2_base18_winner ≥ chi2_oracle_52` by construction (the 18-strategy
+plan is a subset of the same-domain 52-strategy oracle), so their
+delta is always `≥ 0`; 77 of those 99 match the oracle exactly
+(`delta = 0`) and the remaining 22 have small positive delta, up to
+`0.027139`, still below the `0.1` tolerance. The 1 rescued event
+(`catalog_row=36103`) is the sole negative-delta case (explained
+above), giving `100 - 22 = 78` events with `delta ≤ 0` overall
+(77 exact ties + 1 negative). "0 failures at the 0.1 tolerance" must
+not be read as "delta is 0 for every event".
+
+Separately: `N(fail)` at k=18 **without** any rescue was already 0 —
+the t0-active condition triggered the rescue for row 36103 even
+though its un-rescued delta was already ≤0.1; the rescue rule is a
+conservative boundary-condition trigger, not one calibrated to fire
+exactly when `delta_chi2>0.1` would otherwise occur, and the two
+criteria are not the same thing.
+
+*`N(fail_k)` by k* (pure running-min over the stated sequence order,
+no rescue applied at any k):
+
+| k | 1 | 2 | 3 | 4 | 5 | 6 | 7 | 8 | 9 | 10 | 11 | 12 | 13 | 14 | 15 | 16 | 17 | 18 |
+|---|---|---|---|---|---|---|---|---|---|---|---|---|---|---|---|---|---|---|
+| N(fail) | 54 | 38 | 29 | 25 | 24 | 22 | 21 | 18 | 16 | 14 | 13 | 10 | 9 | 8 | 7 | 4 | 1 | 0 |
+
+For context only (not a claim of equivalence: the checkpoint's
+coverage curve, §8, is the *best possible* fixed subset of size k
+chosen by MILP over the full 52-strategy oracle, while this row is
+one specific fixed *prefix* of `gate1_final18`'s own particular
+18-of-52 selection and order): checkpoint coverage-curve N(delta>0.1)
+at the same k values is `51, 37, 27, 21, 17, 14, 12, 10, 9, 8, 7, 6,
+5, 4, 3, 2, 1, 0`. The two tracks are close at every k (this
+particular sequence is not badly inefficient), with the MILP-optimal
+subset consistently at or below the sequential prefix, as expected
+since it is chosen with full hindsight over all 52 strategies rather
+than following one fixed plan's order. The single k=17 failure
+(`N(fail)=1`) is `catalog_row=578896` — one of the checkpoint's own
+named examples of large cross-mode disagreement (§4) — resolved only
+by the 18th, single `log_te_rho` start.
+
+*Empirical `P(fail_k | predictor bucket)`, pooled over all 1800
+`(catalog_row, k)` rows* (full table in
+`results/a1_predictor_vs_failure.csv`):
+
+| predictor | bucket | n_obs | fail_rate |
+|---|---|---:|---:|
+| `n_modes_agreeing_k` | 1 mode | 1041 | 0.249 |
+| `n_modes_agreeing_k` | 2 modes | 470 | 0.072 |
+| `n_modes_agreeing_k` | 3 modes | 283 | 0.071 |
+| `n_modes_agreeing_k` | 4 modes | 6 | 0.000 |
+| `steps_since_improvement_k` | 0 | 306 | 0.366 |
+| `steps_since_improvement_k` | 1-2 | 394 | 0.236 |
+| `steps_since_improvement_k` | 3-5 | 395 | 0.152 |
+| `steps_since_improvement_k` | 6+ | 705 | 0.068 |
+| `delta_spread_k` | [0, 0.01] | 776 | 0.075 |
+| `delta_spread_k` | (0.01, 0.1] | 331 | 0.109 |
+| `delta_spread_k` | (0.1, 1] | 195 | 0.159 |
+| `delta_spread_k` | (1, 10] | 152 | 0.178 |
+| `delta_spread_k` | (10, 100] | 118 | 0.432 |
+| `delta_spread_k` | (100, inf) | 128 | 0.438 |
+| `delta_spread_k` | NA (k=1) | 100 | 0.540 |
+| `winner_t0_active_k` | 0 | 1782 | 0.175 |
+| `winner_t0_active_k` | 1 | 18 | 0.056 |
+| `winner_rho_active_k` | 0 (always) | 1800 | 0.174 |
+| `winner_optimizer_success_k` | True (always) | 1800 | 0.174 |
+
+**8. Interpretation**
+
+**Overarching methodological warning (applies to every predictor
+below, not just `delta_spread_k`): all three of `delta_spread_k`,
+`n_modes_agreeing_k`, and `steps_since_improvement_k` are confounded
+with `k` itself AND with the fixed, mode-blocked execution order
+defined in §4 (`physical`(3) → `log_te`(6) → `log_rho`(8) →
+`log_te_rho`(1)).** Because the sequence is not an interleaving of
+modes but four contiguous blocks, `n_modes_seen_k` (and therefore
+`n_modes_agreeing_k`) can only step from 1→2→3→4 at the fixed block
+boundaries `k=4, 10, 18` — it is mechanically impossible to "see" a
+second mode before `k=4` under this order, regardless of how the
+first mode's fits actually behaved. Likewise `steps_since_improvement_k`
+and `delta_spread_k` both trend with `k` simply because more fits have
+had a chance to find or confirm the running best. None of the three
+pooled associations reported below has been shown to carry
+information beyond "how far into this particular fixed order are we,
+and which block boundary have we crossed" — this has **not** been
+tested at fixed cost, nor under an alternative order or start subset.
+A1 is **diagnostic / hypothesis-generating only**; establishing
+genuine, order-independent predictive power is explicitly deferred to
+Phase B, which must evaluate these (and other) predictors at matched
+`k`/cost across alternative orders or start sets before any of them
+can be treated as informative in their own right.
+
+- `n_modes_agreeing_k` and `steps_since_improvement_k` show the
+  strongest, most monotonic association with failure, in the
+  *expected* direction (more independent agreement, or more
+  repeated confirmation without improvement, associates with lower
+  failure): both are genuine hypotheses worth carrying into Phase B,
+  not yet validated triggers, and both are subject to the k/block-order
+  confound above. **This is a marginal, pooled association, not a
+  per-event rule**: `catalog_row=578896` (the single k=17 failure,
+  §7) is a direct counterexample — `n_modes_agreeing_k` stays at
+  exactly 1 for all 18 steps (the other discovered modes' own best
+  chi2 never comes within 0.1 of the running best), yet the event
+  still resolves correctly at k=18, because the single `log_te_rho`
+  start lands on a materially better minimum on its first and only
+  try, not because multiple coordinate systems converged to
+  agreement. A future trigger built on `n_modes_agreeing_k` alone
+  would need a fallback for exactly this kind of case.
+- `delta_spread_k` also increases with failure rate, but is heavily
+  confounded with `k` itself (both shrink as more fits accumulate;
+  `NA (k=1)` alone has fail_rate 0.540, matching `N(fail_k=1)=54`
+  exactly). Its apparent predictive power in this pooled, marginal
+  table has **not** been separated from a pure "more fits done so
+  far" effect — this must be checked (e.g. conditioning on k, or a
+  multivariate model) before treating `delta_spread_k` as informative
+  beyond what `k` alone already tells you. No claim is made here
+  about `delta_spread_k` having power independent of `k`.
+- `winner_t0_active_k` shows a **lower**, not higher, failure rate
+  when active (0.056 vs 0.175) — the opposite of a naive "active
+  bound implies bad fit" prior, and consistent with §7's finding that
+  the checkpoint's t0-rescue trigger is a conservative
+  boundary-condition safeguard rather than a `delta_chi2>0.1`
+  predictor. This is exactly the kind of non-presupposed-direction
+  result the experiment was designed to surface, and it is a caution
+  against using "active bound therefore untrustworthy" as an
+  unexamined heuristic for any parameter.
+- `winner_rho_active_k` is 0 for every one of the 1800 rows: within
+  `gate1_final18_base_t0margin0`'s own running-best solution, `rho`
+  is never at a bound at any step — consistent with Experiment 0's
+  winner-level finding (§7-§8) and reinforcing that the per-fit rho
+  active rate (individual exploratory starts) is not informative
+  about the winner.
+- `winner_optimizer_success_k` is constant `True`; it carries no
+  information in this dataset (consistent with Experiment 0, §0.4b)
+  and is not a usable Phase-A predictor here either, for the same
+  reason: no variation to learn from on `extreme100`.
+- Operationalizing the t0-rescue rule purely from the k=18 winner's
+  own `active_mask` reproduced the checkpoint's single-event result
+  (`catalog_row=36103`) without reading any event id — this is a
+  successful reproducibility check on the *existing validated* rule,
+  not a new result about adaptivity.
+
+**9. Decision**
+
+**DIAGNOSTIC ONLY / hypothesis-generating.** No predictor here is
+accepted, rejected, or frozen as a trigger, and none of them —
+including `n_modes_agreeing_k` and `steps_since_improvement_k` — has
+demonstrated predictive power independent of `k` and the fixed
+mode-blocked order (§8's overarching warning). `n_modes_agreeing_k`
+and `steps_since_improvement_k` are the most promising *candidates*
+to carry into Phase B precisely because of this experiment; they are
+not validated triggers. `delta_spread_k` additionally needs
+deconfounding from `k` before its apparent signal can be trusted at
+all; `winner_t0_active_k` (at partial k) and
+`winner_optimizer_success_k` are not usable as early-stopping signals
+on this evidence. The full-18 active-mask-triggered rescue rule is
+CONFIRMED to reproduce the checkpoint's validated result (§7,
+including the base-domain-oracle-vs-final-policy distinction in §5)
+and is safe to keep exactly as specified (applied only at k=18).
+
+**10. Consequence**
+
+- No change to the current 18-fit `gate1_final18` production-candidate
+  plan. It remains the validated baseline.
+- Phase B must treat `n_modes_agreeing_k` and
+  `steps_since_improvement_k` as candidate predictors ONLY, and must
+  test whether either carries predictive power independent of `k` and
+  of this particular mode-blocked order — e.g. by evaluating them at
+  fixed `k`/cost under a different order or a different start subset,
+  or with an explicit multivariate model that includes `k` (and, for
+  `n_modes_agreeing_k`, block position) as a control variable — before
+  either is treated as informative on its own. The same applies, more
+  strongly, to `delta_spread_k`, which must additionally be
+  deconfounded from `k` before its apparent signal can be trusted at
+  all. None of these three may be reused as-is from this pooled
+  marginal table as evidence of standalone predictive value.
+- Any proposal to fire the t0 rescue (or any new rescue) before k=18
+  must be written up and evaluated against the oracle as an
+  explicitly new policy — this experiment deliberately did not do
+  that, per instruction.
+- Phase B evaluation must keep the two references from §5 separate:
+  compare candidate sequential policies' intermediate steps against
+  the base-domain oracle (`chi2_oracle_52`), and only compare a
+  policy's final, possibly-rescued result against a like-for-like
+  final reference — never mix the two under one unqualified "oracle".
+
+**11. Next step**
+
+Phase B: design candidate sequential policies (start order,
+stopping rule, rescue conditions) using `n_modes_agreeing_k` and
+`steps_since_improvement_k` as candidate hypotheses to test — not
+pre-validated triggers — explicitly checking for the k/block-order
+confound identified in §8 (e.g. by testing them at matched cost under
+an alternative order or start subset drawn from the 52-strategy
+pool), deconfound `delta_spread_k` from `k` before deciding whether to
+include it, evaluate candidates against the base-domain 52-fit oracle
+for intermediate steps and against the final validated H0 reference
+for policy-level results (§5 terminology), with the full metric set
+requested (mean/percentile `N_fits`, `N(delta>0.1/1/10)`, max delta,
+false/missed-rescue rate), and only then compare cost/robustness
+against the fixed 18-fit baseline.
+
+---
+
 ## 2. Reference: `gate1_oracle_diagnostics.csv` schema
 
 Regenerated by `aggregate_gate1_oracle_diagnostics.py` (re-run,
