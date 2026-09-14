@@ -893,6 +893,331 @@ against the fixed 18-fit baseline.
 
 ---
 
+### Experiment B1 — Fixed-budget base sets and fixed-cost predictors (DIAGNOSTIC / CANDIDATE GENERATION)
+
+**Status: DIAGNOSTIC / CANDIDATE GENERATION**, with one component
+(`diff_u0_signed`, and the always-zero-variance `winner_u0/tE/rho_active`
+predictors) **REJECTED** as fixed-cost predictors on the evidence
+below. This experiment does not select, tune, or freeze any
+stopping/rescue policy. `extreme100` remains the development sample;
+nothing here is claimed to generalize without Gate 3.
+
+**1. Question**
+
+At a fixed H0 fit budget `k` (k=2..6), (a) which small sets of the 52
+canonical `(mode, strategy_id)` strategies come closest to the
+base-domain oracle, across the full severity profile
+(`N(delta>0.1)`, `N(delta>1)`, `N(delta>10)`, `max delta`) rather than
+`N(delta>0.1)` alone; and (b) holding that budget (and, per candidate,
+its exact composition) fixed, do observables computable only from
+that budget's own fits carry information about whether the resulting
+event is still `>0.1` from the base-domain oracle — beyond what
+Experiment A1 already showed is confounded with `k` and with A1's
+particular mode-blocked order?
+
+**2. Motivation**
+
+Direct continuation of the Phase-B mandate (§0.2, Experiment A1 §9):
+before any adaptive/sequential policy can be designed (Phase B2), we
+need (a) a small pool of genuinely competitive fixed-size candidate
+sets — not assumed to be `gate1_final18`'s own prefixes — and (b)
+predictors whose apparent power survives being evaluated at constant
+cost, since A1 explicitly could not separate predictor signal from
+"how many fits have we done" for its own sequential design.
+
+**3. Inputs**
+
+- `results/gate1_oracle_diagnostics.csv`, `source=="gate1_oracle_52"`
+  (Experiment 0's canonical, integrity-checked table; not modified).
+- `results/gate1_h0_coverage_curve.csv` (pre-existing exact-MILP
+  maximum-coverage-at-0.1 result, k=1..18, used only as an
+  independent cross-check — not re-derived, not blindly trusted
+  either).
+- New scripts:
+  `validation/bounds_convergence/analyze_b1_fixed_budget_base_sets.py`
+  and
+  `validation/bounds_convergence/analyze_b1_fixed_cost_predictors.py`.
+
+**4. Method**
+
+*B1a — fixed-budget base-set search.* For each `k` in `{2,3,4,5,6}`,
+**full exhaustive** enumeration of every `C(52,k)` subset (no MILP, no
+heuristic, no early stopping, for any `k` studied — see script
+docstring for the two-pass vectorized implementation that keeps this
+cheap even at `C(52,6)=20,358,520`; measured wall time on this
+machine: pass 1 (primary objective only) 22.3s at k=6, pass 2 (full
+metrics on the top 300 candidates) 2.9s at k=6, well under a second
+for k≤5). Candidates are ranked **lexicographically**, exactly per
+the requested correction: primary `N(delta>0.1)` (minimize), then
+among primary-tied subsets, secondary `N(delta>1)`, tertiary
+`N(delta>10)`, quaternary `max delta`, quinary summed positive excess
+— never calling the primary-only winner "the best set" unqualified.
+Per `k`, the script saves every exactly lexicographic-tied-optimal
+subset plus up to 5 additional near-optimal subsets that introduce a
+mode-composition signature (e.g. `{physical:2}` vs
+`{log_rho:1, physical:1}`) not already saved, so that predictor
+stability can be checked across different compositions, not just at
+one arbitrary optimal point (§7-§8).
+
+Selecting these fixed sets from `chi2_oracle_52` is a **design-time,
+offline** choice (§5) — legitimate under the same logic already
+established for `gate1_final18` itself.
+
+*B1b — fixed-cost predictors.* For every saved `(k, candidate_rank)`
+set and every event, using ONLY that candidate's own `k` fits for
+that event: `chi2_best`, `chi2_second_best`, `delta_spread`, `chi2`
+dispersion (`std`, `range`) among the `k` fits, `n_modes_in_set`,
+`n_modes_agreeing` (modes whose own best-within-set chi2 is within
+0.1 of the overall best-within-set chi2 — same definition as A1's
+`n_modes_agreeing_k`, now evaluated on a fixed unordered set instead
+of an incrementally-revealed sequence), the winning row's
+`optimizer_active_mask` (split into t0/u0/tE/rho active),
+`optimizer_optimality`, `optimizer_success`, and best-vs-second-best
+parameter agreement using **physically-motivated, degeneracy-aware**
+diagnostics per the explicit correction — not raw differences alone:
+`diff_abs_u0 = ||u0_best|-|u0_2nd||` (insensitive to the `u0 -> -u0`
+mirror degeneracy) alongside the raw signed `diff_u0_signed`;
+`abs_log_ratio_tE = |log(tE_best/tE_2nd)|` and
+`abs_log_ratio_rho = |log(rho_best/rho_2nd)|` (log-ratio, since `tE`
+and `rho` are strictly positive and span orders of magnitude);
+`diff_t0_raw` and `diff_t0_norm_by_tE = diff_t0_raw / tE_best`
+(t0 offsets are only meaningful relative to the event's own
+timescale). `steps_since_improvement` is explicitly **not** computed
+here — B1's sets are evaluated as unordered batches, and this
+predictor requires an execution order that only Phase B2 will define.
+
+For every predictor, safe (`delta<=0.1`) vs unsafe (`delta>0.1`)
+distributions are compared **within one fixed `(k, candidate_rank)`**
+— never pooled across `k` the way A1's marginal tables were. Bucketed
+predictors (integer/binary) get a frequency table
+(`n_obs, n_safe, n_unsafe, unsafe_rate`); continuous predictors get
+group means/medians plus a rank-based separation score
+(`auc_unsafe_gt_safe`, the Mann-Whitney probability that a random
+unsafe-event value exceeds a random safe-event value; `0.5` = no
+separation). `N_safe`/`N_unsafe` are reported on every single row of
+`b1_predictor_vs_failure_fixed_k.csv`, per instruction — no bare rate
+without its denominators. No threshold is fit or proposed anywhere in
+this step.
+
+**5. Information allowed in production**
+
+Every B1b predictor is a function only of the `k` fits belonging to
+one fixed, pre-chosen candidate set, for one event — exactly what a
+production run using that fixed set would have on hand (no
+`catalog_row`-based branching, no oracle access at decision time).
+`chi2_oracle_52` is read only to build the offline `safe`/`unsafe`
+label. Choosing WHICH fixed set of `k` strategies to use at all
+(B1a) is a design-time decision made once, offline, on the
+development sample — it is not a per-event runtime decision and does
+not leak the oracle into any simulated production choice. This
+remains `extreme100` development-set analysis throughout; nothing
+here is validated for generalization.
+
+**6. Metrics**
+
+B1a: `N(delta>0.1/1/10)`, `max delta`, summed/mean positive excess,
+per candidate; agreement with the pre-existing MILP coverage curve at
+the primary objective. B1b: `N_safe`, `N_unsafe`, unsafe-rate per
+bucket, and `auc_unsafe_gt_safe` for continuous predictors, per fixed
+`(k, candidate_rank)`; residual-failing-event counts and per-strategy
+rescue rates from the rescue matrix.
+
+**7. Results**
+
+*B1a.* Every `k`'s lexicographic-optimal primary value (`N(delta>0.1)`)
+**exactly matched** the pre-existing `gate1_h0_coverage_curve.csv`
+MILP result (37, 27, 21, 17, 14 for k=2..6) — this exhaustive,
+independently-implemented search agrees exactly with the earlier,
+differently-computed MILP on every `k` tested.
+
+| k | lex-optimal set (mode/strategy_id) | N(>0.1) | N(>1) | N(>10) | max delta | range across the 6 saved candidates (N(>0.1)) |
+|---|---|---:|---:|---:|---:|---|
+| 2 | physical/truth/0.1 + physical/truth/1 | 37 | 24 | 14 | 24836.8 | 37–46 |
+| 3 | log_rho/truth/1 + physical/old_H0/1 + physical/truth/0.1 | 27 | 18 | 7 | 11777.6 | 27–31 |
+| 4 | log_rho/truth/0.1 + log_rho/truth/1 + physical/old_H0/1 + physical/truth/0.1 | 21 | 14 | 5 | 969.6 | 21–24 |
+| 5 | + log_te/truth/0.01 (5-strategy set) | 17 | 10 | 3 | 969.6 | 17–19 |
+| 6 | + log_te/old_H0/truth_rho (6-strategy set) | 14 | 9 | 4 | 969.6 | 14–16 |
+
+(Full sets, all 30 saved candidates with exact strategy lists and
+severity metrics: `results/b1_fixed_budget_candidate_sets.csv`.) The
+5 alternative compositions saved per `k` are close but strictly worse
+on the primary objective (e.g. k=4: 21 vs 22–24) — no alternative
+composition ties the lexicographic optimum at any `k` here, but they
+remain useful as a composition-diversity contrast set for B1b (below).
+
+Residual-failing-event counts under the lexicographic-optimal
+candidates equal their `N(delta>0.1)` exactly (e.g. 21/100 events for
+k=4), confirming `b1_residual_failing_events.csv` is internally
+consistent with `b1_fixed_budget_candidate_sets.csv`.
+
+That every one of those 21 residual events can be rescued by adding
+*some* single strategy from the remaining 48 is **not itself an
+empirical finding** — it follows directly from the definition of
+`chi2_oracle_52` as the pooled minimum over all 52 strategies: if a
+21-of-52 result differs from that pooled minimum, the strategy (or
+strategies) achieving the minimum necessarily lies outside the
+21-set and, added back in, necessarily reproduces it. The informative
+result from `b1_rescue_matrix.csv` (`results/b1_rescue_strategy_summary.csv`
+for the per-strategy counts) is the **distribution** of that
+rescuability, not its mere existence: for k=4's optimal set, **no
+single additional strategy rescues more than 4/21≈19%** of the 21
+residual events (top two: `log_te/truth/1` and `log_te/truth/0.01`,
+each rescuing 4/21) — i.e. the 21 residual events do not cluster
+around one dominant fix; different events need different additional
+strategies. This is what tells us a single fixed fallback strategy is
+unlikely to be a competitive rescue design, and it is the direct
+input B2 needs to design a rescue SET (covering the full spread of
+residual events) rather than one fallback fit — the coverage
+distribution itself, in `b1_rescue_strategy_summary.csv`, is what B2
+should consult, not just this one summary statistic.
+
+*B1b — predictors at fixed k, for the lexicographic-optimal candidate
+of each k* (full table, all 6 candidates x 5 k values:
+`results/b1_predictor_vs_failure_fixed_k.csv`):
+
+| predictor | AUC(unsafe>safe), k=2..6 | direction |
+|---|---|---|
+| `abs_log_ratio_tE` | 0.591, 0.751, 0.778, 0.734, 0.762 | consistently >0.5; the most promising and comparatively stable candidate here |
+| `delta_spread` | 0.627, 0.730, 0.725, 0.669, 0.746 | consistently >0.5; moderate and comparatively stable |
+| `abs_log_ratio_rho` | 0.526, 0.711, 0.703, 0.681, 0.689 | >0.5 for k≥3, weak at k=2 |
+| `diff_t0_raw` | 0.580, 0.704, 0.708, 0.687, 0.710 | consistently >0.5, moderate |
+| `diff_t0_norm_by_tE` | 0.591, 0.655, 0.638, 0.594, 0.623 | consistently >0.5, weaker |
+| `chi2_std_among_set` | 0.627, 0.595, 0.540, 0.523, 0.590 | weak, fading toward k=5 |
+| `chi2_range_among_set` | 0.627, 0.599, 0.545, 0.527, 0.586 | weak, fading toward k=5 |
+| `diff_abs_u0` | 0.531, 0.609, 0.600, 0.616, 0.614 | weak but consistently >0.5 |
+| `winner_optimizer_optimality` | 0.616, 0.527, 0.561, 0.544, 0.644 | unstable, no consistent direction |
+| `diff_u0_signed` | 0.387, 0.511, 0.512, 0.525, 0.368 | **no signal / not consistently >0.5** |
+
+**Statistical caution on the AUC values above**: `n_unsafe` shrinks
+from 37 (k=2) to 14 (k=6), so every AUC at higher `k` is estimated
+from a small sample and carries a correspondingly wide uncertainty;
+none of these AUC values should be read as a precise, stable estimate
+of separation power, only as a same-direction, order-of-magnitude
+signal across `k`. No predictor here is described as "strong" for
+this reason — see §9 for the qualified language used in the decision.
+
+Bucketed `n_modes_agreeing` (lexicographic-optimal candidate): unsafe
+rate drops sharply with more agreeing modes at every k — e.g. k=4:
+30.5% (1 mode) → 7.3% (2 modes); k=6: 20.0% (1) → 17.9% (2) → **0.0%**
+(3, n=27). `winner_t0_active`: only 1/100 events per `k` (always the
+same structural rarity as Experiment 0/A1), and that one event is
+always safe — too sparse to conclude anything, consistent with A1's
+counter-intuitive finding. `winner_u0_active`, `winner_tE_active`,
+`winner_rho_active`: **zero variance** across all 3000
+`(k, candidate_rank, event)` rows — the winner never sits on those
+bounds regardless of which fixed set is used. `winner_optimizer_success`:
+constant `True` throughout, as in every prior experiment.
+
+*Composition-dependence check* (per instruction, point 3): comparing
+`abs_log_ratio_tE` and `delta_spread` AUC across all 6 candidates at
+k=4 shows both stay in a fairly narrow band (0.68–0.78 and 0.67–0.75
+respectively) regardless of composition — comparatively stable, not
+described here as "robust" given the small-sample caution above.
+`n_modes_agreeing`, by contrast, is **not** stable
+across compositions at k=4: candidate 1 (optimal) shows a clean
+monotonic drop (30.5%→7.3%), candidate 3 is much weaker
+(23.8%→18.8%), and candidate 4 actually **reverses** at its
+3-mode-agreement bucket (22.4%→21.1%→40.0%, though that last bucket
+has only n=5 — likely noise, but not demonstrated to be noise here).
+
+**8. Interpretation**
+
+- `abs_log_ratio_tE` and `delta_spread` are the most promising /
+  moderate and comparatively stable fixed-cost predictor candidates
+  identified so far — not "strong predictors": their separation is
+  not an artifact of `k` (by construction, `k` is fixed within each
+  comparison) and is reasonably stable across different set
+  compositions at a given `k`, which is a methodologically cleaner
+  result than A1's pooled, k-confounded association for
+  `delta_spread`, but the AUC values themselves are small-sample
+  estimates (§7) and B1 remains DIAGNOSTIC / CANDIDATE GENERATION —
+  no trigger is validated here.
+- `n_modes_agreeing` (bucketed) shows the sharpest unsafe-rate
+  contrast of any predictor tested, but its stability across
+  different compositions of the same `k` is NOT established here —
+  it works cleanly for some sets and only weakly, or with a reversal
+  in a small bucket, for others. This must not be read as a validated
+  trigger; it needs testing across more/different compositions in
+  B2 before being trusted the way `abs_log_ratio_tE`/`delta_spread`
+  currently can be.
+- `diff_u0_signed` (AUC clustering around/below 0.5, including two
+  values `<0.5`) shows **no usable signal**, while the
+  degeneracy-aware `diff_abs_u0` shows a weak but consistently `>0.5`
+  signal — direct empirical confirmation that the raw signed
+  difference was the wrong quantity to use, exactly the failure mode
+  the instruction anticipated.
+- `winner_u0_active`, `winner_tE_active`, `winner_rho_active` carry
+  zero information (no variance) at any tested `k` or composition —
+  consistent with, and now extended from, Experiment 0/A1's
+  winner-level finding that these bounds are essentially never active
+  for the winning H0 solution in `extreme100`.
+- `winner_optimizer_success` remains constant `True` in every
+  experiment run so far on `extreme100` (Experiment 0, A1, B1) — it
+  is not a usable development-sample predictor, but per §0.4b it must
+  remain a pipeline sanity check for Gate 3 / production, where it
+  may actually vary.
+- The rescue-matrix **distribution** (no single strategy rescues more
+  than ~19% of a candidate's residual events, not merely "some
+  strategy always exists" — which is definitional, see §7) is an
+  important input for B2 design: a fixed small base set plus a single
+  fixed fallback strategy is unlikely to be competitive; B2 will
+  likely need either a small rescue SET or an event-conditional choice
+  among rescue candidates, driven by an actually-validated predictor
+  (not yet available at that confidence level here).
+
+**9. Decision**
+
+**DIAGNOSTIC / CANDIDATE GENERATION** for the base-set search (B1a)
+and for `abs_log_ratio_tE`, `delta_spread`, `abs_log_ratio_rho`,
+`diff_t0_raw`, `diff_t0_norm_by_tE`, `diff_abs_u0`, and bucketed
+`n_modes_agreeing` (all show `>0.5` separation at fixed cost, none
+validated as a threshold or trigger). **REJECTED** as fixed-cost
+predictors: `diff_u0_signed` (no consistent signal; superseded by
+`diff_abs_u0`), `winner_u0_active`/`winner_tE_active`/`winner_rho_active`
+(zero variance), and `winner_optimizer_success` (zero variance on
+this development sample; retained only as a pipeline sanity check,
+not a predictor). `winner_optimizer_optimality` and
+`chi2_std/range_among_set` are **INCONCLUSIVE** — weak and
+k-unstable, not clearly usable but not cleanly rejected either.
+
+**10. Consequence**
+
+- B2 should prioritize `abs_log_ratio_tE` and `delta_spread` as the
+  leading fixed-cost trigger candidates, given their AUC stability
+  across both `k` and composition.
+- B2 may still consider `n_modes_agreeing` but must test its
+  stability more broadly (more compositions, and eventually the
+  independent Gate-3 sample) before relying on it alone.
+- B2's rescue-set design must account for the finding that no single
+  additional strategy rescues most residual events under a small base
+  set — `results/b1_rescue_matrix.csv` /
+  `results/b1_rescue_strategy_summary.csv` are the direct input for
+  choosing a rescue SET (or an event-conditional rescue choice) rather
+  than one fixed fallback strategy.
+- `diff_u0_signed` should be dropped from further predictor
+  candidate lists; `diff_abs_u0` may replace it if a u0-based
+  predictor is wanted at all (it is currently weak either way).
+- No change to `gate1_final18` or any production/fitter code. This
+  remains entirely offline, development-set (`extreme100`) evidence.
+
+**11. Next step**
+
+Phase B2: design candidate sequential/adaptive policies that combine
+a small fixed base set (from `b1_fixed_budget_candidate_sets.csv`, k
+in the 4–6 range looks most promising given its severity profile) with
+a stopping/rescue decision built on `abs_log_ratio_tE` and/or
+`delta_spread` (and, cautiously, `n_modes_agreeing`), plus the
+existing validated full-set-winner t0 rescue rule (§0.4, unchanged),
+and a rescue set informed by `b1_rescue_strategy_summary.csv` for
+whichever events remain hard. Every B2 policy must be evaluated with
+the full metric set already specified (mean/percentile `N_fits`,
+`N(delta>0.1/1/10)`, max delta, false/missed-rescue rate) against the
+base-domain oracle for intermediate steps and the final validated H0
+reference for policy-level results (§5 terminology from Experiment
+A1), and no threshold may be selected by looking only at the mean.
+
+---
+
 ## 2. Reference: `gate1_oracle_diagnostics.csv` schema
 
 Regenerated by `aggregate_gate1_oracle_diagnostics.py` (re-run,
