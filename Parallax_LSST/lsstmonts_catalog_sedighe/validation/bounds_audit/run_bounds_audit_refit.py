@@ -82,6 +82,7 @@ def build_parser():
             "te50000",
             "te100000",
             "te500000",
+            "production_candidate",
             "stress",
         ],
         default="audit_legacy",

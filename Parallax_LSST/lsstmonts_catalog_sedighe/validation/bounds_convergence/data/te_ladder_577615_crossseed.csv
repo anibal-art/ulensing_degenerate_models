@@ -1,0 +1,2 @@
+catalog_row,sample,source_profile,source_label,source_chi2,t0,u0,tE,rho,source_file
+577615,extreme100,control20000,crossseed_control20000_old_H0_rho_0.01,33912.21452861664,2463647.2160103004,0.0004397948989843,19999.999999999956,0.0006085618356635,/home/anibal-pc/Downloads/hidden_parallax/hidden_parallax_refit_test/refits/bounds_convergence/control20000_h0only/extreme100/577615/all_refits.csv

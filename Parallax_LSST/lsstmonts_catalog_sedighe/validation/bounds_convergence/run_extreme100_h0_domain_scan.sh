@@ -16,24 +16,29 @@ WRAPPER="${PROJECT_DIR}/validation/bounds_audit/run_bounds_audit_refit.py"
 
 MANIFEST="${PROJECT_DIR}/validation/bounds_convergence/data/extreme100_refit_manifest.csv"
 
-export HIDDEN_PARALLAX_BOUNDS_AUDIT_ROOT="${
-    HIDDEN_PARALLAX_BOUNDS_AUDIT_ROOT:-
-    ${HOME}/Downloads/hidden_parallax/hidden_parallax_refit_test
-}"
+export HIDDEN_PARALLAX_BOUNDS_AUDIT_ROOT="${HIDDEN_PARALLAX_BOUNDS_AUDIT_ROOT:-${HOME}/Downloads/hidden_parallax/hidden_parallax_refit_test}"
 
-export ROMAN_RUBIN_DIR="${
-    ROMAN_RUBIN_DIR:-
-    ${HOME}/microlensing/simulation_Rubin/roman_rubin
-}"
+export ROMAN_RUBIN_DIR="${ROMAN_RUBIN_DIR:-${HOME}/microlensing/simulation_Rubin/roman_rubin}"
 
 # Optional validation cross-seeds.
 if [[ -n "${CROSSSEED_MANIFEST:-}" ]]; then
+
     export HIDDEN_PARALLAX_H0_CROSSSEED_MANIFEST="${CROSSSEED_MANIFEST}"
+
     echo "Cross-seeds = ${HIDDEN_PARALLAX_H0_CROSSSEED_MANIFEST}"
+
 else
+
     unset HIDDEN_PARALLAX_H0_CROSSSEED_MANIFEST || true
+
     echo "Cross-seeds = NONE"
+
 fi
+
+
+# ============================================================
+# Rows
+# ============================================================
 
 if [[ -n "${ROW_ONLY:-}" ]]; then
 
@@ -61,7 +66,17 @@ PY
 
 fi
 
+
+# ============================================================
+# Profiles
+# ============================================================
+
 PROFILES="${PROFILES:-reference5000 control20000}"
+
+
+# ============================================================
+# Optional flags
+# ============================================================
 
 EXTRA_ARGS=()
 
@@ -73,10 +88,16 @@ if [[ "${DRY_RUN:-0}" == "1" ]]; then
     EXTRA_ARGS+=(--dry-run)
 fi
 
+
+# ============================================================
+# Diagnostics
+# ============================================================
+
 echo
 echo "PROJECT_DIR = ${PROJECT_DIR}"
 echo "MANIFEST    = ${MANIFEST}"
 echo "WORK_ROOT   = ${HIDDEN_PARALLAX_BOUNDS_AUDIT_ROOT}"
+echo "ROMAN_RUBIN = ${ROMAN_RUBIN_DIR}"
 echo "PROFILES    = ${PROFILES}"
 
 NROWS="$(
@@ -85,6 +106,11 @@ NROWS="$(
 
 echo "N rows      = ${NROWS}"
 echo
+
+
+# ============================================================
+# Run
+# ============================================================
 
 for ROW in ${ROWS}
 do

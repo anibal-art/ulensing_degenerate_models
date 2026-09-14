@@ -634,6 +634,639 @@ def _install_bounded_flux_profile_runtime_patch():
 _install_bounded_flux_profile_runtime_patch()
 
 
+# ============================================================
+# TRF X_SCALE BENCHMARK
+# ============================================================
+#
+# Validation-only runtime patch.
+#
+# Select with:
+#
+#   HIDDEN_PARALLAX_TRF_X_SCALE=pylima
+#   HIDDEN_PARALLAX_TRF_X_SCALE=jac
+#   HIDDEN_PARALLAX_TRF_X_SCALE=decade
+#
+# It changes ONLY scipy.optimize.least_squares(..., x_scale=...).
+# Bounds, starts, objective function, loss, tolerances,
+# numerical Jacobian and bounded flux profiling are unchanged.
+# ============================================================
+
+# TRF_X_SCALE_BENCHMARK_PATCH_V1
+
+def _trf_x_scale_mode():
+
+    import os as _os
+
+    mode = str(
+        _os.environ.get(
+            "HIDDEN_PARALLAX_TRF_X_SCALE",
+            "pylima",
+        )
+    ).strip().lower()
+
+    allowed = {
+        "pylima",
+        "jac",
+        "decade",
+    }
+
+    if mode not in allowed:
+        raise ValueError(
+            "Invalid HIDDEN_PARALLAX_TRF_X_SCALE="
+            f"{mode!r}; expected one of {sorted(allowed)}"
+        )
+
+    return mode
+
+
+def _install_trf_x_scale_runtime_patch():
+
+    import inspect as _inspect
+    import textwrap as _textwrap
+
+    from pyLIMA.fits import TRF_fit as _TRF_fit_scale
+
+    mode = _trf_x_scale_mode()
+
+    if mode == "pylima":
+
+        print(
+            "[trf_x_scale] "
+            "mode=pylima; using original pyLIMA scaling",
+            flush=True,
+        )
+
+        return
+
+    # --------------------------------------------------------
+    # Start from the ACTUAL installed pyLIMA implementation
+    # and modify only the single line defining `scaling`.
+    # This avoids maintaining a second copy of TRFfit.fit().
+    # --------------------------------------------------------
+
+    source = _textwrap.dedent(
+        _inspect.getsource(
+            _TRF_fit_scale.TRFfit.fit
+        )
+    )
+
+    old = (
+        "    scaling = "
+        "10**np.floor(np.log10(np.abs(self.guess)))+1"
+    )
+
+    if old not in source:
+        raise RuntimeError(
+            "Installed TRFfit.fit() does not contain the "
+            "expected pyLIMA scaling expression."
+        )
+
+    if mode == "jac":
+
+        new = (
+            "    scaling = 'jac'"
+        )
+
+    elif mode == "decade":
+
+        new = """    _abs_guess = np.abs(
+        np.asarray(
+            self.guess,
+            dtype=float,
+        )
+    )
+
+    scaling = np.ones_like(
+        _abs_guess,
+        dtype=float,
+    )
+
+    _nonzero = _abs_guess > 0.0
+
+    scaling[_nonzero] = (
+        10.0
+        ** np.floor(
+            np.log10(
+                _abs_guess[_nonzero]
+            )
+        )
+    )"""
+
+    else:
+        raise RuntimeError(mode)
+
+    patched_source = source.replace(
+        old,
+        new,
+        1,
+    )
+
+    namespace = {}
+
+    exec(
+        compile(
+            patched_source,
+            "<hidden-parallax TRF x_scale patch>",
+            "exec",
+        ),
+        _TRF_fit_scale.__dict__,
+        namespace,
+    )
+
+    _TRF_fit_scale.TRFfit.fit = (
+        namespace["fit"]
+    )
+
+    print(
+        "[trf_x_scale] "
+        f"runtime patch installed; mode={mode}",
+        flush=True,
+    )
+
+
+_install_trf_x_scale_runtime_patch()
+
+
+# ============================================================
+# TRF COORDINATE BENCHMARK
+# ============================================================
+#
+# Validation-only runtime patch.
+#
+# Select with:
+#
+#   HIDDEN_PARALLAX_TRF_COORDS=physical
+#   HIDDEN_PARALLAX_TRF_COORDS=log_te_rho
+#
+# In log_te_rho mode scipy.optimize.least_squares sees:
+#
+#   (t0, u0, log10(tE), log10(rho), ...)
+#
+# while pyLIMA's objective function continues to receive the
+# original physical parameters:
+#
+#   (t0, u0, tE, rho, ...)
+#
+# Bounds and starts therefore remain defined in physical units.
+# ============================================================
+
+# TRF_COORDINATE_BENCHMARK_PATCH_V1
+
+def _trf_coordinate_mode():
+
+    import os as _os
+
+    mode = str(
+        _os.environ.get(
+            "HIDDEN_PARALLAX_TRF_COORDS",
+            "physical",
+        )
+    ).strip().lower()
+
+    allowed = {
+        "physical",
+        "log_te",
+        "log_rho",
+        "log_te_rho",
+    }
+
+    if mode not in allowed:
+        raise ValueError(
+            "Invalid HIDDEN_PARALLAX_TRF_COORDS="
+            f"{mode!r}; expected one of {sorted(allowed)}"
+        )
+
+    return mode
+
+
+def _install_trf_coordinate_runtime_patch():
+
+    import os as _os
+    import time as _time
+
+    import numpy as _np
+    import scipy.optimize as _spopt
+
+    from pyLIMA.fits import TRF_fit as _TRF_coord
+
+    mode = _trf_coordinate_mode()
+
+    if mode == "physical":
+
+        print(
+            "[trf_coords] "
+            "mode=physical; using physical tE,rho coordinates",
+            flush=True,
+        )
+
+        return
+
+    # Keep x_scale fixed to the pyLIMA baseline so that this
+    # experiment changes only the parameterization.
+    scale_mode = str(
+        _os.environ.get(
+            "HIDDEN_PARALLAX_TRF_X_SCALE",
+            "pylima",
+        )
+    ).strip().lower()
+
+    if scale_mode != "pylima":
+        raise RuntimeError(
+            "For the coordinate benchmark set "
+            "HIDDEN_PARALLAX_TRF_X_SCALE=pylima. "
+            f"Current value={scale_mode!r}"
+        )
+
+    def _fit_log_te_rho(self):
+
+        starting_time = _time.time()
+
+        # ----------------------------------------------------
+        # Physical initial guess and physical bounds
+        # ----------------------------------------------------
+
+        self.guess = self.initial_guess()
+
+        if self.guess is None:
+            return
+
+        keys = list(
+            self.fit_parameters.keys()
+        )
+
+        x0 = _np.asarray(
+            self.guess,
+            dtype=float,
+        )
+
+        bounds_min = _np.asarray(
+            [
+                self.fit_parameters[key][1][0]
+                for key in keys
+            ],
+            dtype=float,
+        )
+
+        bounds_max = _np.asarray(
+            [
+                self.fit_parameters[key][1][1]
+                for key in keys
+            ],
+            dtype=float,
+        )
+
+        transformed = []
+
+        parameters_to_transform = {
+            "log_te": [
+                "tE",
+            ],
+            "log_rho": [
+                "rho",
+            ],
+            "log_te_rho": [
+                "tE",
+                "rho",
+            ],
+        }[mode]
+
+        for parameter in parameters_to_transform:
+
+            if parameter in keys:
+                transformed.append(
+                    (
+                        parameter,
+                        keys.index(parameter),
+                    )
+                )
+
+        if not transformed:
+            raise RuntimeError(
+                "log_te_rho requested but neither "
+                "tE nor rho is present."
+            )
+
+        for parameter, index in transformed:
+
+            if not (
+                x0[index] > 0.0
+                and bounds_min[index] > 0.0
+                and bounds_max[index] > 0.0
+            ):
+                raise RuntimeError(
+                    f"{parameter} must be strictly positive "
+                    "for logarithmic coordinates: "
+                    f"guess={x0[index]}, "
+                    f"bounds=[{bounds_min[index]}, "
+                    f"{bounds_max[index]}]"
+                )
+
+        # ----------------------------------------------------
+        # Coordinate transformations
+        # ----------------------------------------------------
+
+        def _to_internal(x):
+
+            z = _np.asarray(
+                x,
+                dtype=float,
+            ).copy()
+
+            for _, index in transformed:
+                z[index] = _np.log10(
+                    z[index]
+                )
+
+            return z
+
+        def _to_physical(z):
+
+            x = _np.asarray(
+                z,
+                dtype=float,
+            ).copy()
+
+            for _, index in transformed:
+                x[index] = (
+                    10.0 ** x[index]
+                )
+
+            return x
+
+        z0 = _to_internal(x0)
+        zmin = _to_internal(bounds_min)
+        zmax = _to_internal(bounds_max)
+
+        # ----------------------------------------------------
+        # Same pyLIMA scaling prescription, now applied to the
+        # coordinates actually seen by TRF.
+        # ----------------------------------------------------
+
+        abs_z0 = _np.abs(z0)
+
+        scaling = _np.ones_like(
+            abs_z0,
+            dtype=float,
+        )
+
+        nonzero = abs_z0 > 0.0
+
+        scaling[nonzero] = (
+            10.0
+            ** _np.floor(
+                _np.log10(
+                    abs_z0[nonzero]
+                )
+            )
+            + 1.0
+        )
+
+        # ----------------------------------------------------
+        # Same data counting as pyLIMA TRFfit.fit()
+        # ----------------------------------------------------
+
+        n_data = 0
+
+        for telescope in self.model.event.telescopes:
+
+            n_data += telescope.n_data(
+                "flux"
+            )
+
+            n_data += telescope.n_data(
+                "astrometry"
+            )
+
+        # Our bounded-flux-profile runtime patch already forces
+        # Jacobian_flag="Numerical". The transformed objective
+        # also requires the numerical Jacobian.
+        jacobian_function = "2-point"
+
+        if self.loss_function == "soft_l1":
+            loss = "soft_l1"
+        else:
+            loss = "linear"
+
+        # ----------------------------------------------------
+        # Objective in internal coordinates.
+        #
+        # pyLIMA itself still receives physical parameters.
+        # ----------------------------------------------------
+
+        def _objective_internal(z):
+
+            x = _to_physical(z)
+
+            return self.objective_function(
+                x
+            )
+
+        trf_fit = _spopt.least_squares(
+            _objective_internal,
+            z0,
+            method="trf",
+            bounds=(zmin, zmax),
+            max_nfev=50000,
+            jac=jacobian_function,
+            loss=loss,
+            xtol=10**-10,
+            ftol=10**-10,
+            gtol=10**-10,
+            x_scale=scaling,
+        )
+
+        z_best = _np.asarray(
+            trf_fit["x"],
+            dtype=float,
+        )
+
+        x_best = _to_physical(
+            z_best
+        )
+
+        fit_chi2 = (
+            trf_fit["cost"]
+            * 2.0
+        )
+
+        # ----------------------------------------------------
+        # Covariance in internal coordinates
+        # ----------------------------------------------------
+
+        try:
+
+            jac_z = _np.asarray(
+                trf_fit["jac"],
+                dtype=float,
+            )
+
+            covariance_z = _np.linalg.pinv(
+                jac_z.T @ jac_z
+            )
+
+        except ValueError:
+
+            jac_z = _np.asarray(
+                trf_fit["jac"],
+                dtype=float,
+            )
+
+            covariance_z = _np.zeros(
+                (
+                    len(self.fit_parameters),
+                    len(self.fit_parameters),
+                )
+            )
+
+        dof_scale = (
+            fit_chi2
+            / (
+                n_data
+                - len(
+                    self.model.model_dictionnary
+                )
+            )
+        )
+
+        covariance_z *= dof_scale
+
+        # ----------------------------------------------------
+        # Transform covariance back to physical coordinates:
+        #
+        #   C_x = G C_z G^T
+        #
+        # where dx/dlog10(x) = ln(10) x.
+        # ----------------------------------------------------
+
+        G = _np.eye(
+            len(x_best),
+            dtype=float,
+        )
+
+        for _, index in transformed:
+
+            G[index, index] = (
+                _np.log(10.0)
+                * x_best[index]
+            )
+
+        covariance_x = (
+            G
+            @ covariance_z
+            @ G.T
+        )
+
+        # Physical Jacobian, useful for any downstream diagnostic.
+        #
+        # J_z = J_x dx/dz
+        #
+        # therefore
+        #
+        # J_x = J_z dz/dx.
+        dz_dx = _np.ones(
+            len(x_best),
+            dtype=float,
+        )
+
+        for _, index in transformed:
+
+            dz_dx[index] = (
+                1.0
+                / (
+                    _np.log(10.0)
+                    * x_best[index]
+                )
+            )
+
+        jac_x = (
+            jac_z
+            * dz_dx[
+                _np.newaxis,
+                :
+            ]
+        )
+
+        # Preserve internal information explicitly before making
+        # fit_object externally consistent with physical coordinates.
+        trf_fit["x_internal"] = (
+            z_best.copy()
+        )
+
+        trf_fit["jac_internal"] = (
+            jac_z.copy()
+        )
+
+        trf_fit["bounds_internal"] = (
+            zmin.copy(),
+            zmax.copy(),
+        )
+
+        trf_fit["coordinate_mode"] = (
+            mode
+        )
+
+        trf_fit[
+            "transformed_parameters"
+        ] = [
+            parameter
+            for parameter, _ in transformed
+        ]
+
+        # Expose physical x/jac to downstream code.
+        trf_fit["x"] = (
+            x_best.copy()
+        )
+
+        trf_fit["jac"] = (
+            jac_x
+        )
+
+        computation_time = (
+            _time.time()
+            - starting_time
+        )
+
+        print(
+            self.fit_type()
+            + " fit SUCCESS"
+        )
+
+        self.fit_results = {
+            "best_model":
+                x_best,
+
+            self.loss_function:
+                fit_chi2,
+
+            "fit_time":
+                computation_time,
+
+            "covariance_matrix":
+                covariance_x,
+
+            "fit_object":
+                trf_fit,
+        }
+
+        self.print_fit_results()
+
+    _TRF_coord.TRFfit.fit = (
+        _fit_log_te_rho
+    )
+
+    print(
+        "[trf_coords] "
+        "runtime patch installed; "
+        f"mode={mode}",
+        flush=True,
+    )
+
+
+_install_trf_coordinate_runtime_patch()
+
+
+
+
 
 
 
@@ -750,6 +1383,14 @@ BOUNDS_PROFILES = {
         "rho": [1.0e-7, 10.0],
         "piEN": [-20.0, 20.0],
         "piEE": [-20.0, 20.0],
+    },
+
+    "production_candidate": {
+        "u0": [-10.0, 10.0],
+        "tE": [0.1, 500000.0],
+        "rho": [1.0e-7, 10.0],
+        "piEN": [-40.0, 40.0],
+        "piEE": [-40.0, 40.0],
     },
 
     "te5000": {
@@ -1485,12 +2126,54 @@ def run_one_fit(
             "no Rubin photometry found."
         )
 
-    t_min = float(
+    data_t_min = float(
         np.min(all_times)
     )
 
-    t_max = float(
+    data_t_max = float(
         np.max(all_times)
+    )
+
+    t_obs = (
+        data_t_max
+        - data_t_min
+    )
+
+    t0_margin_factor = float(
+        os.environ.get(
+            "HIDDEN_PARALLAX_T0_MARGIN_FACTOR",
+            "0",
+        )
+    )
+
+    if t0_margin_factor < 0:
+        raise ValueError(
+            "HIDDEN_PARALLAX_T0_MARGIN_FACTOR "
+            "must be >= 0."
+        )
+
+    t0_margin = (
+        t0_margin_factor
+        * t_obs
+    )
+
+    t_min = (
+        data_t_min
+        - t0_margin
+    )
+
+    t_max = (
+        data_t_max
+        + t0_margin
+    )
+
+    print(
+        "[t0_bounds] "
+        f"data=[{data_t_min:.10f}, {data_t_max:.10f}] "
+        f"Tobs={t_obs:.10f} "
+        f"margin_factor={t0_margin_factor:g} "
+        f"fit=[{t_min:.10f}, {t_max:.10f}]",
+        flush=True,
     )
 
     bounds["t0"] = {
@@ -1864,6 +2547,187 @@ def run_event(
         n_h0_crossseeds_added,
     )
 
+    # ========================================================
+    # OPTIONAL GATE-1 FINAL H0 START PLAN
+    # ========================================================
+    #
+    # Validation-only reduced start plan selected from the
+    # extreme100 4-coordinate x 13-start oracle.
+    #
+    # Default "all" preserves the historical behaviour exactly.
+    #
+    # The reduced plan is semantic: it is defined by
+    #   coordinate system
+    #   nuisance anchor
+    #   rho initialization rule
+    #
+    # and does not depend on accidental start-slot numbering.
+    # ========================================================
+
+    h0_start_plan = os.environ.get(
+        "HIDDEN_PARALLAX_H0_START_PLAN",
+        "all",
+    ).strip()
+
+    if h0_start_plan == "gate1_final18":
+
+        if n_h0_crossseeds_added != 0:
+            raise RuntimeError(
+                "gate1_final18 must be run without "
+                "H0 validation cross-seeds."
+            )
+
+        coordinate_mode = os.environ.get(
+            "HIDDEN_PARALLAX_TRF_COORDS",
+            "physical",
+        ).strip()
+
+        gate1_plan = {
+            "physical": [
+                ("old_H0", 1.0),
+                ("truth", 0.1),
+                ("truth", 1.0),
+            ],
+
+            "log_te": [
+                ("old_H0", "truth_rho"),
+                ("old_H0", 0.01),
+                ("old_H0", 0.1),
+                ("old_H0", 1.0),
+                ("truth", 0.01),
+                ("truth", 1.0),
+            ],
+
+            "log_rho": [
+                ("old_H0", "truth_rho"),
+                ("old_H0", 0.01),
+                ("old_H0", 1.0),
+                ("truth", "truth_rho"),
+                ("truth", 1e-6),
+                ("truth", 1e-4),
+                ("truth", 0.1),
+                ("truth", 1.0),
+            ],
+
+            "log_te_rho": [
+                ("truth", 1e-6),
+            ],
+        }
+
+        if coordinate_mode not in gate1_plan:
+            raise RuntimeError(
+                "Unsupported coordinate mode for "
+                "gate1_final18: "
+                f"{coordinate_mode!r}"
+            )
+
+        anchor_lookup = {
+            name: np.asarray(v, dtype=float)
+            for name, v in h0_anchor_vectors
+        }
+
+        reduced_starts = []
+        reduced_seen = set()
+
+        for anchor_name, rho_rule in gate1_plan[
+            coordinate_mode
+        ]:
+
+            if anchor_name not in anchor_lookup:
+                raise RuntimeError(
+                    f"Missing H0 anchor {anchor_name!r}"
+                )
+
+            v = anchor_lookup[
+                anchor_name
+            ]
+
+            if rho_rule == "truth_rho":
+                rho = float(
+                    truth["rho"]
+                )
+                rho_tag = "truth"
+            else:
+                rho = float(
+                    rho_rule
+                )
+                rho_tag = (
+                    f"{rho:.6g}"
+                )
+
+            key = (
+                round(float(v[0]), 5),
+                round(float(v[1]), 6),
+                round(float(v[2]), 5),
+                round(float(rho), 8),
+            )
+
+            # In the unusual case that two semantic rules
+            # generate exactly the same physical initial point,
+            # run that point only once.
+            if key in reduced_seen:
+                continue
+
+            reduced_seen.add(
+                key
+            )
+
+            label = (
+                f"{anchor_name}_"
+                f"rho_{rho_tag}"
+            )
+
+            reduced_starts.append(
+                (
+                    label,
+                    {
+                        "t0":
+                            float(v[0]),
+                        "u0":
+                            float(v[1]),
+                        "tE":
+                            float(v[2]),
+                        "rho":
+                            float(rho),
+                    },
+                )
+            )
+
+        h0_starts = reduced_starts
+
+        print()
+        print(
+            "[gate1_final18] "
+            f"coordinate_mode={coordinate_mode}"
+        )
+
+        print(
+            "[gate1_final18] "
+            f"H0 starts={len(h0_starts)}"
+        )
+
+        for i, (
+            label,
+            initial,
+        ) in enumerate(
+            h0_starts,
+            1,
+        ):
+            print(
+                "[gate1_final18] "
+                f"{i:02d} "
+                f"{label} "
+                f"initial={initial}"
+            )
+
+    elif h0_start_plan != "all":
+
+        raise RuntimeError(
+            "Unknown "
+            "HIDDEN_PARALLAX_H0_START_PLAN="
+            f"{h0_start_plan!r}"
+        )
+
     # --------------------------------------------------------
     # H1:
     # every distinct old piE basin + truth
@@ -1920,6 +2784,324 @@ def run_event(
                     },
                 )
             )
+
+    # ========================================================
+    # EXACT H0 -> H1 NESTEDNESS ANCHOR
+    # ========================================================
+    #
+    # This start is kept separate from h1_anchors() because
+    # piE-basin deduplication must never remove the exact
+    # embedded H0 solution.
+    #
+    # H1(theta_H0, piEN=0, piEE=0) is the exact null model
+    # embedded inside H1.
+    # ========================================================
+
+    n_h0_nested_anchor_added = 0
+
+    h0_anchor_manifest = os.environ.get(
+        "HIDDEN_PARALLAX_H0_ANCHOR_MANIFEST",
+        "",
+    ).strip()
+
+    if h0_anchor_manifest:
+
+        h0_anchor_df = pd.read_csv(
+            h0_anchor_manifest
+        )
+
+        x = h0_anchor_df[
+            pd.to_numeric(
+                h0_anchor_df["catalog_row"],
+                errors="coerce",
+            )
+            == int(meta["row"])
+        ].copy()
+
+        if "sample" in x.columns:
+            x = x[
+                x["sample"].astype(str)
+                == str(meta["sample"])
+            ]
+
+        if len(x) != 1:
+            raise RuntimeError(
+                "Expected exactly one final H0 anchor "
+                f"for row={meta['row']}, "
+                f"sample={meta['sample']}; found {len(x)}."
+            )
+
+        r = x.iloc[0]
+
+        expected_margin = float(
+            r["t0_margin_factor"]
+        )
+
+        current_margin = float(
+            os.environ.get(
+                "HIDDEN_PARALLAX_T0_MARGIN_FACTOR",
+                "0",
+            )
+        )
+
+        if not np.isclose(
+            expected_margin,
+            current_margin,
+            rtol=0.0,
+            atol=1.0e-12,
+        ):
+            raise RuntimeError(
+                "H1 t0 domain does not match the final H0 "
+                f"domain for row={meta['row']}: "
+                f"H0 margin={expected_margin}, "
+                f"H1 margin={current_margin}."
+            )
+
+        nested_initial = {
+            "t0": float(r["t0"]),
+            "u0": float(r["u0"]),
+            "tE": float(r["tE"]),
+            "rho": float(r["rho"]),
+            "piEN": 0.0,
+            "piEE": 0.0,
+        }
+
+        # Remove an accidentally identical start if one already
+        # exists, then insert the explicitly labelled H0 anchor.
+        def _h1_start_key(initial):
+            return (
+                round(float(initial["t0"]), 5),
+                round(float(initial["u0"]), 6),
+                round(float(initial["tE"]), 5),
+                round(float(initial["rho"]), 8),
+                round(float(initial["piEN"]), 6),
+                round(float(initial["piEE"]), 6),
+            )
+
+        nested_key = _h1_start_key(
+            nested_initial
+        )
+
+        h1_starts = [
+            (label, initial)
+            for label, initial in h1_starts
+            if _h1_start_key(initial)
+            != nested_key
+        ]
+
+        h1_starts.insert(
+            0,
+            (
+                "H0_NESTED_piE_0",
+                nested_initial,
+            ),
+        )
+
+        n_h0_nested_anchor_added = 1
+
+        print()
+        print(
+            "[H1 nested anchor] "
+            f"row={meta['row']} "
+            f"chi2_H0={float(r['chi2_h0']):.12g} "
+            f"t0_margin={current_margin:g}"
+        )
+
+        print(
+            "[H1 nested anchor] "
+            f"initial={nested_initial}"
+        )
+
+    # ========================================================
+    # OPTIONAL CONTROLLED H1 MULTISTART
+    # ========================================================
+    #
+    # Intended for controlled simulations where the generating
+    # parameters are known. This deliberately avoids using the
+    # historical H1 basin catalogue as a production strategy.
+    #
+    # controlled4:
+    #   1. exact truth
+    #   2. final H0 solution embedded at piE = 0
+    #   3. truth with half the true parallax vector
+    #   4. approximate mirror start:
+    #          u0   -> -u0
+    #          piEN -> -piEN
+    #          piEE unchanged
+    #
+    # The H0 embedded start is mandatory for numerical nestedness.
+    # ========================================================
+
+    h1_start_plan = os.environ.get(
+        "HIDDEN_PARALLAX_H1_START_PLAN",
+        "all",
+    ).strip()
+
+    if h1_start_plan in {
+        "controlled4",
+        "controlled5",
+        "old_final_only",
+    }:
+
+        if n_h0_nested_anchor_added != 1:
+            raise RuntimeError(
+                "HIDDEN_PARALLAX_H1_START_PLAN=controlled4 "
+                "requires exactly one final H0 nested anchor. "
+                "Set HIDDEN_PARALLAX_H0_ANCHOR_MANIFEST."
+            )
+
+        truth_initial = {
+            "t0": float(truth["t0"]),
+            "u0": float(truth["u0"]),
+            "tE": float(truth["tE"]),
+            "rho": float(truth["rho"]),
+            "piEN": float(truth["piEN"]),
+            "piEE": float(truth["piEE"]),
+        }
+
+        half_pie_initial = {
+            "t0": float(truth["t0"]),
+            "u0": float(truth["u0"]),
+            "tE": float(truth["tE"]),
+            "rho": float(truth["rho"]),
+            "piEN": 0.5 * float(truth["piEN"]),
+            "piEE": 0.5 * float(truth["piEE"]),
+        }
+
+        mirror_initial = {
+            "t0": float(truth["t0"]),
+            "u0": -float(truth["u0"]),
+            "tE": float(truth["tE"]),
+            "rho": float(truth["rho"]),
+            "piEN": -float(truth["piEN"]),
+            "piEE": float(truth["piEE"]),
+        }
+
+        candidate_starts = [
+            (
+                "truth",
+                truth_initial,
+            ),
+            (
+                "H0_NESTED_piE_0",
+                nested_initial,
+            ),
+            (
+                "truth_half_piE",
+                half_pie_initial,
+            ),
+            (
+                "truth_mirror_u0_piEN",
+                mirror_initial,
+            ),
+        ]
+
+        if h1_start_plan == "controlled5":
+
+            old_v = np.asarray(
+                meta["old_h1"],
+                dtype=float,
+            )
+
+            if len(old_v) < 6:
+                raise RuntimeError(
+                    "old_h1 has fewer than 6 parameters."
+                )
+
+            old_final_initial = {
+                "t0": float(old_v[0]),
+                "u0": float(old_v[1]),
+                "tE": float(old_v[2]),
+                "rho": float(old_v[3]),
+                "piEN": float(old_v[4]),
+                "piEE": float(old_v[5]),
+            }
+
+            candidate_starts.append(
+                (
+                    "old_final_reseed",
+                    old_final_initial,
+                )
+            )
+
+        if h1_start_plan == "old_final_only":
+
+            old_v = np.asarray(
+                meta["old_h1"],
+                dtype=float,
+            )
+
+            if len(old_v) < 6:
+                raise RuntimeError(
+                    "old_h1 has fewer than 6 parameters."
+                )
+
+            candidate_starts = [
+                (
+                    "old_final_reseed",
+                    {
+                        "t0": float(old_v[0]),
+                        "u0": float(old_v[1]),
+                        "tE": float(old_v[2]),
+                        "rho": float(old_v[3]),
+                        "piEN": float(old_v[4]),
+                        "piEE": float(old_v[5]),
+                    },
+                )
+            ]
+
+        # Defensive exact-start deduplication.
+        controlled = []
+        seen = set()
+
+        for label, initial in candidate_starts:
+
+            key = (
+                round(float(initial["t0"]), 5),
+                round(float(initial["u0"]), 6),
+                round(float(initial["tE"]), 5),
+                round(float(initial["rho"]), 8),
+                round(float(initial["piEN"]), 6),
+                round(float(initial["piEE"]), 6),
+            )
+
+            if key in seen:
+                continue
+
+            seen.add(key)
+            controlled.append(
+                (
+                    label,
+                    initial,
+                )
+            )
+
+        h1_starts = controlled
+
+        print()
+        print(
+            "[controlled4] "
+            f"H1 starts={len(h1_starts)}"
+        )
+
+        for i, (label, initial) in enumerate(
+            h1_starts,
+            1,
+        ):
+            print(
+                "[controlled4] "
+                f"{i:02d} "
+                f"{label} "
+                f"initial={initial}"
+            )
+
+    elif h1_start_plan != "all":
+
+        raise RuntimeError(
+            "Unknown "
+            "HIDDEN_PARALLAX_H1_START_PLAN="
+            f"{h1_start_plan!r}"
+        )
 
     print()
     print(
@@ -2186,6 +3368,12 @@ def run_event(
 
         "n_h1_starts":
             len(h1_starts),
+
+        "h1_start_plan":
+            h1_start_plan,
+
+        "n_h0_nested_anchor_added":
+            n_h0_nested_anchor_added,
     }
 
     with open(
@@ -2247,6 +3435,7 @@ parser.add_argument(
         "te50000",
         "te100000",
         "te500000",
+        "production_candidate",
         "stress",
     ],
     default="audit_legacy",

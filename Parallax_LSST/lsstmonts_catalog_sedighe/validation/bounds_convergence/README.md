@@ -235,3 +235,15 @@ diagnostics rather than bound evidence.
 Events with a domain or optimizer discrepancy larger than 0.1 are then
 cross-seeded in a second pass. Cross-seeding is a validation device only
 and is not a proposed production initialization strategy.
+
+## Current validation checkpoint
+
+The current H0/H1 fitter-validation state, including the validated
+parameter domains, Gate-1 H0 results, Gate-2 H1 multistart results,
+open decisions, and next validation step, is documented in:
+
+- `VALIDATION_STATUS_2026-09-14.md`
+
+This checkpoint should be read before modifying the current H0/H1
+bounds, multistart strategies, coordinate parameterizations, or
+nestedness handling.
