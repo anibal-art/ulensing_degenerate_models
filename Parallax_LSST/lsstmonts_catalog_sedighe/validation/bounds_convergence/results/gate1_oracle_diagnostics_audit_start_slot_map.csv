@@ -1,0 +1,89 @@
+source,mode,start_slot,n_distinct_labels,n_events_covering_slot,example_labels
+gate1_final18_base_t0margin0,log_rho,1,1,100,old_H0_rho_truth
+gate1_final18_base_t0margin0,log_rho,2,1,100,old_H0_rho_0.01
+gate1_final18_base_t0margin0,log_rho,3,1,100,old_H0_rho_1
+gate1_final18_base_t0margin0,log_rho,4,1,100,truth_rho_truth
+gate1_final18_base_t0margin0,log_rho,5,1,100,truth_rho_1e-06
+gate1_final18_base_t0margin0,log_rho,6,1,100,truth_rho_0.0001
+gate1_final18_base_t0margin0,log_rho,7,1,100,truth_rho_0.1
+gate1_final18_base_t0margin0,log_rho,8,1,100,truth_rho_1
+gate1_final18_base_t0margin0,log_te,1,1,100,old_H0_rho_truth
+gate1_final18_base_t0margin0,log_te,2,1,100,old_H0_rho_0.01
+gate1_final18_base_t0margin0,log_te,3,1,100,old_H0_rho_0.1
+gate1_final18_base_t0margin0,log_te,4,1,100,old_H0_rho_1
+gate1_final18_base_t0margin0,log_te,5,1,100,truth_rho_0.01
+gate1_final18_base_t0margin0,log_te,6,1,100,truth_rho_1
+gate1_final18_base_t0margin0,log_te_rho,1,1,100,truth_rho_1e-06
+gate1_final18_base_t0margin0,physical,1,1,100,old_H0_rho_1
+gate1_final18_base_t0margin0,physical,2,1,100,truth_rho_0.1
+gate1_final18_base_t0margin0,physical,3,1,100,truth_rho_1
+gate1_final18_rescue_t0margin0.25,log_rho,1,1,100,old_H0_rho_truth
+gate1_final18_rescue_t0margin0.25,log_rho,2,1,100,old_H0_rho_0.01
+gate1_final18_rescue_t0margin0.25,log_rho,3,1,100,old_H0_rho_1
+gate1_final18_rescue_t0margin0.25,log_rho,4,1,100,truth_rho_truth
+gate1_final18_rescue_t0margin0.25,log_rho,5,1,100,truth_rho_1e-06
+gate1_final18_rescue_t0margin0.25,log_rho,6,1,100,truth_rho_0.0001
+gate1_final18_rescue_t0margin0.25,log_rho,7,1,100,truth_rho_0.1
+gate1_final18_rescue_t0margin0.25,log_rho,8,1,100,truth_rho_1
+gate1_final18_rescue_t0margin0.25,log_te,1,1,100,old_H0_rho_truth
+gate1_final18_rescue_t0margin0.25,log_te,2,1,100,old_H0_rho_0.01
+gate1_final18_rescue_t0margin0.25,log_te,3,1,100,old_H0_rho_0.1
+gate1_final18_rescue_t0margin0.25,log_te,4,1,100,old_H0_rho_1
+gate1_final18_rescue_t0margin0.25,log_te,5,1,100,truth_rho_0.01
+gate1_final18_rescue_t0margin0.25,log_te,6,1,100,truth_rho_1
+gate1_final18_rescue_t0margin0.25,log_te_rho,1,1,100,truth_rho_1e-06
+gate1_final18_rescue_t0margin0.25,physical,1,1,100,old_H0_rho_1
+gate1_final18_rescue_t0margin0.25,physical,2,1,100,truth_rho_0.1
+gate1_final18_rescue_t0margin0.25,physical,3,1,100,truth_rho_1
+gate1_oracle_52,log_rho,1,86,100,old_H0_rho_0.000105178 | old_H0_rho_0.000132091 | old_H0_rho_0.000133141 | old_H0_rho_0.000134978 | old_H0_rho_0.000148138 | ...
+gate1_oracle_52,log_rho,2,100,100,old_H0_rho_0.0001011 | old_H0_rho_0.0001214 | old_H0_rho_0.0001228 | old_H0_rho_0.0001234 | old_H0_rho_0.0001397 | ...
+gate1_oracle_52,log_rho,3,1,100,old_H0_rho_1e-06
+gate1_oracle_52,log_rho,4,1,100,old_H0_rho_0.0001
+gate1_oracle_52,log_rho,5,1,100,old_H0_rho_0.01
+gate1_oracle_52,log_rho,6,1,100,old_H0_rho_0.1
+gate1_oracle_52,log_rho,7,1,100,old_H0_rho_1
+gate1_oracle_52,log_rho,8,100,100,truth_rho_0.0001011 | truth_rho_0.0001214 | truth_rho_0.0001228 | truth_rho_0.0001234 | truth_rho_0.0001397 | ...
+gate1_oracle_52,log_rho,9,1,100,truth_rho_1e-06
+gate1_oracle_52,log_rho,10,1,100,truth_rho_0.0001
+gate1_oracle_52,log_rho,11,1,100,truth_rho_0.01
+gate1_oracle_52,log_rho,12,1,100,truth_rho_0.1
+gate1_oracle_52,log_rho,13,1,100,truth_rho_1
+gate1_oracle_52,log_te,1,86,100,old_H0_rho_0.000105178 | old_H0_rho_0.000132091 | old_H0_rho_0.000133141 | old_H0_rho_0.000134978 | old_H0_rho_0.000148138 | ...
+gate1_oracle_52,log_te,2,100,100,old_H0_rho_0.0001011 | old_H0_rho_0.0001214 | old_H0_rho_0.0001228 | old_H0_rho_0.0001234 | old_H0_rho_0.0001397 | ...
+gate1_oracle_52,log_te,3,1,100,old_H0_rho_1e-06
+gate1_oracle_52,log_te,4,1,100,old_H0_rho_0.0001
+gate1_oracle_52,log_te,5,1,100,old_H0_rho_0.01
+gate1_oracle_52,log_te,6,1,100,old_H0_rho_0.1
+gate1_oracle_52,log_te,7,1,100,old_H0_rho_1
+gate1_oracle_52,log_te,8,100,100,truth_rho_0.0001011 | truth_rho_0.0001214 | truth_rho_0.0001228 | truth_rho_0.0001234 | truth_rho_0.0001397 | ...
+gate1_oracle_52,log_te,9,1,100,truth_rho_1e-06
+gate1_oracle_52,log_te,10,1,100,truth_rho_0.0001
+gate1_oracle_52,log_te,11,1,100,truth_rho_0.01
+gate1_oracle_52,log_te,12,1,100,truth_rho_0.1
+gate1_oracle_52,log_te,13,1,100,truth_rho_1
+gate1_oracle_52,log_te_rho,1,86,100,old_H0_rho_0.000105178 | old_H0_rho_0.000132091 | old_H0_rho_0.000133141 | old_H0_rho_0.000134978 | old_H0_rho_0.000148138 | ...
+gate1_oracle_52,log_te_rho,2,100,100,old_H0_rho_0.0001011 | old_H0_rho_0.0001214 | old_H0_rho_0.0001228 | old_H0_rho_0.0001234 | old_H0_rho_0.0001397 | ...
+gate1_oracle_52,log_te_rho,3,1,100,old_H0_rho_1e-06
+gate1_oracle_52,log_te_rho,4,1,100,old_H0_rho_0.0001
+gate1_oracle_52,log_te_rho,5,1,100,old_H0_rho_0.01
+gate1_oracle_52,log_te_rho,6,1,100,old_H0_rho_0.1
+gate1_oracle_52,log_te_rho,7,1,100,old_H0_rho_1
+gate1_oracle_52,log_te_rho,8,100,100,truth_rho_0.0001011 | truth_rho_0.0001214 | truth_rho_0.0001228 | truth_rho_0.0001234 | truth_rho_0.0001397 | ...
+gate1_oracle_52,log_te_rho,9,1,100,truth_rho_1e-06
+gate1_oracle_52,log_te_rho,10,1,100,truth_rho_0.0001
+gate1_oracle_52,log_te_rho,11,1,100,truth_rho_0.01
+gate1_oracle_52,log_te_rho,12,1,100,truth_rho_0.1
+gate1_oracle_52,log_te_rho,13,1,100,truth_rho_1
+gate1_oracle_52,physical,1,86,100,old_H0_rho_0.000105178 | old_H0_rho_0.000132091 | old_H0_rho_0.000133141 | old_H0_rho_0.000134978 | old_H0_rho_0.000148138 | ...
+gate1_oracle_52,physical,2,100,100,old_H0_rho_0.0001011 | old_H0_rho_0.0001214 | old_H0_rho_0.0001228 | old_H0_rho_0.0001234 | old_H0_rho_0.0001397 | ...
+gate1_oracle_52,physical,3,1,100,old_H0_rho_1e-06
+gate1_oracle_52,physical,4,1,100,old_H0_rho_0.0001
+gate1_oracle_52,physical,5,1,100,old_H0_rho_0.01
+gate1_oracle_52,physical,6,1,100,old_H0_rho_0.1
+gate1_oracle_52,physical,7,1,100,old_H0_rho_1
+gate1_oracle_52,physical,8,100,100,truth_rho_0.0001011 | truth_rho_0.0001214 | truth_rho_0.0001228 | truth_rho_0.0001234 | truth_rho_0.0001397 | ...
+gate1_oracle_52,physical,9,1,100,truth_rho_1e-06
+gate1_oracle_52,physical,10,1,100,truth_rho_0.0001
+gate1_oracle_52,physical,11,1,100,truth_rho_0.01
+gate1_oracle_52,physical,12,1,100,truth_rho_0.1
+gate1_oracle_52,physical,13,1,100,truth_rho_1
