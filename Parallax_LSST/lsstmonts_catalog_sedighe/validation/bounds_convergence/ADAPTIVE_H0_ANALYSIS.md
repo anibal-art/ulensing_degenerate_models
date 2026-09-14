@@ -1218,6 +1218,427 @@ A1), and no threshold may be selected by looking only at the mean.
 
 ---
 
+### Experiment B1c — Simulation-aware event difficulty (DIAGNOSTIC / CANDIDATE GENERATION)
+
+**Status: DIAGNOSTIC / CANDIDATE GENERATION**, with an explicit
+**REJECTED** finding for one specific claim (pre-H0 simulation
+features alone, or combined with B1's fit diagnostics, as a useful
+exploratory classifier at N=100 — see §9). `extreme100` remains the
+development sample; nothing here authorizes a production policy or
+Phase B2 design decision by itself.
+
+**1. Question**
+
+Do truth/simulation properties and generated-light-curve properties —
+all available in memory after simulating an event and *before* any H0
+fit runs — predict (a) whether Experiment B1's small fixed H0 base
+sets already reach the base-domain oracle within 0.1, (b) which
+coordinate-mode family of additional strategy would rescue the event
+if not, and (c) whether this "pre-H0" information adds anything beyond
+what Experiment B1's own fixed-cost fit diagnostics already show once
+the small base set has actually been run?
+
+**2. Motivation**
+
+This project optimizes a Monte Carlo simulation pipeline for parallax
+detectability, not a fitter for real survey data. In that setting,
+truth and generated-data properties are not "leakage" in the
+production-relevant sense — the outcome we must never use as a
+feature is the exhaustive/oracle result itself (§0.3, reaffirmed
+below). If simulation-aware information can cheaply route an event to
+an appropriate H0 strategy *before* spending any fits, that is a
+genuinely different, and potentially much cheaper, kind of adaptive
+policy than the fit-sequential ideas from Experiment A1/B1.
+
+**3. Inputs**
+
+- Local, not repository-tracked (same class of dependency as the
+  Gate-1 raw fit directories already used by
+  `aggregate_gate1_oracle_diagnostics.py`): per-event `Event_*.h5`
+  (generated light curves, one group per band with `time, mag,
+  err_mag, flux, err_flux, photometry_keep, ...`) and
+  `true_rr_manual_*.parquet` (truth + simulation/survey metadata),
+  under
+  `~/Downloads/hidden_parallax/hidden_parallax_refit_test/artifacts/extreme100/<catalog_row>/...`
+  (configurable via `--root` / `B1C_ARTIFACTS_ROOT`). Verified present
+  for all 100 `extreme100` events (0 missing, 0 extra) before use.
+- `validation/bounds_convergence/data/extreme100_refit_manifest.csv`
+  (canonical truth `u0/tE/rho/piEN/piEE` — the same values the fitter
+  itself uses as its "truth" anchor).
+- `results/b1_predictors_per_event.csv`, `b1_fixed_budget_candidate_sets.csv`,
+  `b1_rescue_matrix.csv` (Experiment B1, unmodified) — read only to
+  build offline labels and, for Phase F scenario B/C, B1's own
+  fixed-cost fit diagnostics.
+- New script:
+  `validation/bounds_convergence/analyze_b1c_simulation_difficulty.py`.
+
+**4. Method**
+
+*Leakage boundary, traced from code, not assumed.* Read
+`validation/bounds_audit/run_bounds_audit_refit_core.py`'s
+`load_case()` (loads the H5 via `load_h5_lightcurves()`, lines
+1540-1606, and the truth parquet) and its `DATA-DRIVEN t0 BOUND` block
+(lines ~2091-2168): `Tobs` is computed from `meta["curves"]`
+*before* any H0 bounds/starts/optimizer setup, and `meta["curves"]` is
+passed to the fit call (lines ~2246-2264) **unmodified** — no
+additional filtering between load and fit. This is direct, in-repo
+evidence that Tobs, Ndata, per-band counts, sampling and
+photometric-precision quantities derived from the same arrays are
+genuinely pre-H0, not merely plausible-sounding proxies.
+
+*`Ndata_H0_input` — resolved, not assumed.* Defined as
+`Σ_band len(meta["curves"][band])`, i.e. exactly
+`load_h5_lightcurves`'s own filter
+(`photometry_keep & isfinite(t,mag,err_mag) & err_mag>0`), replicated
+read-only in the new script (not imported from core, to keep this
+script fully decoupled from any production code path). Verified
+against the truth parquet's `fit_n_points_total` for **all 100/100
+events: exact match, 0 mismatches** (audit output, §7) — resolving the
+earlier open question: `n_data_true` is a *different*, occasionally
+diverging quantity from an earlier/external simulation stage (not
+traceable further, since it originates outside this repository) and
+is **not** used as a sampling feature anywhere in this experiment.
+
+*Feature set — core vs. exploratory, deliberately small given N=100*
+(see module docstring for exact derivations):
+- **Core truth/geometry (5):** `log10_tE_true, log10_rho_true,
+  abs_u0_true, abs_u0_over_rho (= abs_u0_true/rho_true, not the
+  signed ratio), piE_true`.
+- **Core sampling (9), computed from the H5, per-band first and then
+  aggregated (never concatenating interleaved-band timestamps):**
+  `Tobs_over_tE, Ndata_H0_input, n_filters_H0, frac_within_0p5_tE,
+  frac_within_1_tE, frac_within_2_tE, pre_post_imbalance,
+  median_cadence_across_bands` (median of each band's own median
+  cadence), `max_gap_within_1tE_across_bands` (max of each band's own
+  max gap inside `±tE_true`).
+- **Core photometry (2):** `median_err_mag` (photometric precision,
+  median-of-per-band-medians), `median_abs_flux_over_err_flux`
+  (`|flux|/err_flux` per point, median-of-per-band-medians — an
+  explicit **flux-precision proxy, not a microlensing-signal or
+  parallax-detection S/N**, and not called "S/N" anywhere in outputs).
+- **Core brightness/blending (4):** `brightest_source_mag,
+  median_source_mag_visible, min_source_fraction_visible,
+  median_source_fraction_visible`, all aggregated only over bands
+  actually present in that event's H5 (not the parquet's static
+  6-band columns, several of which are `NaN` per event).
+- **Exploratory (10, kept in `b1c_event_features.csv` but not fed to
+  Phase D/F models):** `lens_mass_msun, D_L, D_S, mu_rel, thetaE_mas,
+  source_radius_rsun_catalog, l_deg, b_deg, piEN_true, piEE_true`.
+- **Raw audit columns** (also in `b1c_event_features.csv`, to let the
+  derivations above be independently reproduced/verified):
+  `t0_true, tE_true, rho_true, u0_true, piEN_true, piEE_true,
+  Tobs_global, Ndata_<band>` (7 bands), `fit_n_points_total_parquet`,
+  `ndata_h0_input_matches_fit_n_points_total`, `ndata_mismatch_abs`.
+- `delta_chi2_catalog` remains **excluded** (§7 of the prior planning
+  turn): its provenance relative to this repo's own H0 input is
+  unresolved (it may or may not require an auxiliary fit upstream),
+  so it is not treated as a free pre-H0 quantity here.
+
+*Labels (offline only, never features):* `unsafe_k{4,5,6}` and
+`delta_vs_oracle_k{4,5,6}` read directly from
+`b1_predictors_per_event.csv` (`candidate_rank==1`, i.e. each k's own
+lexicographic-optimal candidate from Experiment B1 — reused, not
+recomputed). `min_candidate_budget_reaching_tol` = smallest
+k∈{2,3,4,5,6} whose **own independently-optimized** candidate already
+has `delta<=0.1` for that event; **the k=2..6 candidates are not
+nested**, so this characterizes B1's specific candidate policies, not
+an intrinsic "minimum starts truly required" property of the event.
+Rescue-family labels (`rescued_by_{physical,log_te,log_rho,log_te_rho}`,
+`n_rescuing_strategies_<mode>`, `n_rescuing_modes`) are multilabel, built
+from `b1_rescue_matrix.csv` at `k=4, candidate_rank=1`, grouping
+`remaining_strategy` by its `mode` — no forced single "preferred
+rescue" class.
+
+*Analysis order, exactly as specified:* Phase A (build + hard-audit
+the event table) → Phase B (univariate association of every feature
+vs. `unsafe_k{4,5,6}`: AUC, medians/quartiles, `n_safe`/`n_unsafe`
+always shown; Spearman rho of the feature vs. continuous
+`delta_vs_oracle_k`) → Phase C (the same table's rows for the 6
+declared scientific-risk variables — `tE_true, piE_true, rho_true,
+abs_u0_true`, brightness, blending — examined explicitly, regardless
+of whether they turn out predictive) → Phase D (logistic regression +
+shallow decision tree only, repeated stratified CV, ROC AUC / PR AUC,
+class sizes and fold-to-fold variability reported; no random
+forest/boosting used, since nothing in the descriptive phases
+justified adding non-interpretable models) → Phase E (rescue-family
+associations, `INCONCLUSIVE` when a mode's rescued/not-rescued class
+has `<3` residual events) → Phase F (three feature scenarios — A:
+core pre-H0 only, B: B1's fixed-cost fit diagnostics only, C:
+combined — compared via the same CV machinery as Phase D; these rows
+live inside `b1c_difficulty_models_cv.csv`, tagged by
+`feature_scenario`, rather than a separate combined-models file, since
+a separate file would duplicate the same table with no new
+information).
+
+**5. Information allowed in "simulation-aware" policy design**
+
+Every core/exploratory feature is a function only of the truth
+parquet and the H5 light curve for that event — available before any
+H0 fit, per the traced leakage boundary (§4). `catalog_row` is used
+only to join tables, never as a feature or as a special-case
+condition. `chi2_oracle_52` and everything derived from it
+(`unsafe_k*, delta_vs_oracle_k*, min_candidate_budget_reaching_tol`,
+rescue-family labels) are read **only** to build offline evaluation
+labels in Phase A's label-loading step — Phase A's feature-building
+step (`build_event_features`) never touches them. B1's fixed-cost fit
+diagnostics (Phase F scenario B/C) are explicitly **not** pre-H0 —
+they require the small base set to have already run — and are kept in
+a separate, clearly-labeled block, never merged into the "core"
+feature set silently.
+
+**6. Metrics**
+
+Phase A: row/uniqueness counts, `Ndata_H0_input` vs.
+`fit_n_points_total` match rate, per-feature missingness. Phase
+B/C: `n_safe`, `n_unsafe`, medians, IQR, `auc_unsafe_gt_safe`
+(Mann-Whitney), Spearman rho/p vs. continuous delta. Phase D/F: ROC
+AUC, PR AUC (mean ± std over repeated-CV folds), class sizes, number
+of fold evaluations. Phase E: `n_rescued`, `n_not_rescued`, medians,
+AUC, explicit `INCONCLUSIVE` marking.
+
+**7. Results**
+
+*Phase A audit* (`analyze_b1c_simulation_difficulty.py` run in this
+session): 100/100 rows, 100/100 distinct `catalog_row`, no
+duplicates. **`Ndata_H0_input` matched `fit_n_points_total` for
+100/100 events, 0 mismatches** — the H5-derived definition is not
+just consistent with the parquet's own recorded fit-input count in
+the 4 events spot-checked during planning, it holds for the entire
+sample. No missing/non-finite values in any core or exploratory
+feature for any event.
+
+*Label cross-check:* `unsafe_k4/k5/k6` counts from this table (21,
+17, 14) reproduce Experiment B1's own `N(delta>0.1)` for the k=4/5/6
+lexicographic-optimal candidates exactly — confirms the label-loading
+path is wired correctly. `min_candidate_budget_reaching_tol`: 63
+events already safe at k=2, 13 more first safe at k=3, 5 at k=4, 4 at
+k=5, 4 at k=6, and **11/100 events are not reached by any of the five
+independently-optimized k=2..6 candidates** (consistent with
+non-nestedness — a larger k's own candidate is not guaranteed to be a
+superset of a smaller k's).
+
+*Phase B/C — univariate, k=4* (full table, all k and all features:
+`results/b1c_feature_vs_difficulty.csv`): every single feature's
+`auc_unsafe_gt_safe` falls in **0.42-0.63** — i.e. no feature shows
+anything beyond weak separation on its own. The largest: `piEN_true`
+(exploratory) 0.629, `abs_u0_true` (core, scientific-risk) 0.596,
+`max_gap_within_1tE_across_bands` 0.574, `frac_within_1_tE` 0.565.
+`median_source_fraction_visible` is **constant at 1.0 for all 100
+events** (Spearman/AUC undefined, `NaN`) — this simulated catalog has
+essentially no blending at the median-band level; `min_source_fraction_visible`
+is not constant but is saturated at 1.0 for 75% of events (weak signal,
+AUC 0.458, i.e. not even in the expected direction).
+
+*Phase C — scientific-risk stratification* (mandatory regardless of
+predictive value): of the 6 declared risk variables, `piE_true`,
+`log10_tE_true`, `log10_rho_true`, and `median_source_mag_visible`
+(brightness) are all within AUC≈0.48-0.58 at every k — **no strong
+concentration of `unsafe` events detected in high-piE, long-tE,
+small-rho, or bright-source regions within `extreme100`.**
+`abs_u0_true` shows a consistent, mild/moderate signal across all
+three k (AUC 0.596-0.619; unsafe events have larger median
+`|u0_true|` — e.g. k=4: 0.744 unsafe vs. 0.460 safe) — flagged to
+monitor, not alarming at this AUC. **Blending
+(`median_source_fraction_visible`) cannot be assessed at all: it is
+constant at 1.0 for all 100 events, and `min_source_fraction_visible`
+is saturated at 1.0 for 75/100 — `extreme100` simply does not contain
+the strongly-blended regime this risk check would need to be
+informative.** This is a statement about the development sample's
+coverage, not a (positive or negative) finding about blending itself.
+
+*CV pipeline audit (before trusting Phase D/F's ROC AUC<0.5 cells).*
+Verified explicitly in this session, on the actual fitted objects
+(not by inspection alone):
+- **positive class is `unsafe==True`**: `y = unsafe_k{k}.astype(int)`,
+  confirmed `sum(y)` equals the known `unsafe_k{k}` count (e.g. 21 for
+  k=4) for every k;
+- **the score used is `P(class==1)`**, read via
+  `predict_proba(...)[:, positive_col]` with `positive_col` located
+  from `model.classes_ == 1` rather than assumed to be column 1 —
+  confirmed `classes_ == [0, 1]` for every fitted model, so column 1
+  was already correct, but the code no longer assumes it;
+- **logistic regression is scaled** (`StandardScaler`), fit on the
+  training fold and applied to the test fold, inside the CV loop --
+  confirmed in code;
+- **imputation was fit on the full dataset before the CV split** in
+  the first version of this script -- a genuine leakage bug in
+  general, but empirically inert here: `n_nan_total == 0` for every
+  one of the 9 (k, scenario) combinations (core, B1-diagnostics, and
+  combined feature matrices all have zero missing values for these
+  100 events), confirmed by direct inspection and now also printed by
+  the script itself. The code was corrected to fit imputation inside
+  the training fold regardless, so it cannot become a live leakage
+  path if a future re-run (e.g. on a Gate-3 sample) does have missing
+  values. Re-running after the fix reproduced **byte-identical**
+  `roc_auc_mean`/`pr_auc_mean` values to the pre-fix run for every
+  row, confirming the fix changed nothing here;
+- no label/score inversion found anywhere in the pipeline.
+
+Per-cell audit printout (prevalence = fraction unsafe = the PR-AUC
+random-classifier baseline):
+
+| k | model | scenario | prevalence | roc_auc | pr_auc | pr_auc baseline |
+|---|---|---|---:|---:|---:|---:|
+| 4 | logistic | A | 0.210 | 0.417 | 0.295 | 0.210 |
+| 4 | tree | A | 0.210 | 0.531 | 0.246 | 0.210 |
+| 6 | logistic | A | 0.140 | 0.321 | 0.146 | 0.140 |
+| 6 | tree | A | 0.140 | 0.441 | 0.172 | 0.140 |
+
+(full 18-row table with every k/model/scenario:
+`results/b1c_difficulty_models_cv.csv`, now including explicit
+`prevalence_unsafe` and `pr_auc_baseline_prevalence` columns). **The
+reported B1c CV metrics were unaffected by the latent
+imputation-leakage bug because all evaluated feature matrices
+contained zero missing values. After moving imputation inside each
+training fold, all ROC-AUC and PR-AUC results were reproduced
+exactly. The remaining ROC-AUC < 0.5 cells (worst: 0.321 at k=6,
+scenario A, logistic regression) therefore reflect poor out-of-sample
+generalization of the tested model/feature set, not score inversion
+or CV leakage.**
+
+*Phase D/F — exploratory CV models* (`results/b1c_difficulty_models_cv.csv`,
+repeated stratified CV, up to 5-fold x 10 repeats): **scenario A (core pre-H0 features only)
+gives ROC AUC 0.32-0.53 across k=4/5/6 and both models — at or below
+chance in most cells, including 0.32 (worse than random) for logistic
+regression at k=6.** Scenario B (B1's 5 fixed-cost fit diagnostics
+only) gives ROC AUC 0.61-0.72, consistent with Experiment B1's own
+marginal AUCs. **Scenario C (combined) gives ROC AUC 0.49-0.56 —
+worse than scenario B alone at every k**, consistent with adding 14
+weak/noisy core features diluting or overfitting relative to B1's
+already-moderate 5-feature signal at N=100.
+
+*Phase E — rescue-family associations* (`results/b1c_rescue_family_associations.csv`,
+21 residual k=4 events): 60/80 (feature, mode) combinations were
+`DIAGNOSTIC`, 20/80 `INCONCLUSIVE` (all involving `log_te_rho`, whose
+residual-event count in either class is `<3` for every feature — too
+few to say anything). Among `DIAGNOSTIC` rows, the strongest are for
+`mode=physical` (only 4/21 residual events rescued by physical,
+**very small sample**): `Tobs_over_tE` AUC 0.838 (rescued events have
+much larger `Tobs_over_tE`, median 60 vs. 30) and `log10_rho_true`
+AUC 0.750. `mode=log_te` (12 rescued / 9 not, better balanced) shows
+moderate associations with `median_err_mag` (0.685) and
+`abs_u0_over_rho` (0.667). `mode=log_rho` (7/14) shows weaker,
+scattered associations (max 0.663).
+
+**8. Interpretation**
+
+- The Ndata/leakage-boundary work (§4, §7) is a clean, fully verified
+  methodological result independent of everything else: pre-H0
+  sampling features are exactly reconstructible from local artifacts,
+  and `Ndata_H0_input` is now unambiguous and repo-code-verified.
+- Pre-H0 simulation/truth features, **alone**, do not show useful
+  out-of-sample predictive power for `unsafe_k` at N=100 (Phase D
+  scenario A). This is a materially different, and more informative,
+  result than "no strong univariate signal" (Phase B) — it shows the
+  weak marginal associations do not combine into anything usable
+  multivariately at this sample size, most likely because 14
+  core features chasing 14-21 positive cases overfits badly under CV.
+- Combining pre-H0 features with B1's fixed-cost fit diagnostics
+  **hurts** performance relative to fit diagnostics alone at this N
+  (scenario C < scenario B). This is a genuine, not-hypothesized,
+  negative finding: at N=100, a simulation-aware layer does not
+  currently earn its complexity on top of what Experiment B1 already
+  extracts from a small executed base set.
+- The rescue-family results are the most interesting exploratory
+  finding (§7), but rest on very small samples (as few as 4 rescued
+  events for `physical`) — real signal is plausible (e.g. `physical`-mode
+  rescues concentrating in large-`Tobs_over_tE`, large-`rho_true`
+  events is physically not unreasonable) but cannot be distinguished
+  from noise at this N. `log_te_rho` cannot be assessed at all here.
+- The scientific-risk stratification (§7, Phase C) is reassuring: no
+  strong evidence that this line of computational optimization would
+  concentrate errors in the high-piE / long-tE / small-rho regime that
+  matters most for the detectability science question. The one caveat
+  (`abs_u0_true`, moderate) should be re-examined once/if a
+  simulation-aware policy is ever designed, not ignored.
+
+**9. Decision**
+
+**DIAGNOSTIC / CANDIDATE GENERATION** overall. Specifically:
+- Phase A event table: **ACCEPTED** as a reproducible, audited
+  artifact (100/100 rows, 0 duplicates, 0 Ndata mismatches, full
+  feature coverage).
+- Pre-H0 features as a **standalone** difficulty classifier at N=100:
+  **REJECTED** (Phase D scenario A, ROC AUC at/below chance across
+  k=4/5/6/both models tested) — this is a claim about *this*
+  exploratory attempt at *this* sample size, not a claim that no
+  pre-H0 signal can ever exist.
+- Pre-H0 features **combined** with B1's fit diagnostics at N=100:
+  **REJECTED** (scenario C consistently worse than scenario B alone).
+- B1's fixed-cost fit diagnostics, reproduced here as scenario B:
+  status unchanged from Experiment B1 (DIAGNOSTIC / CANDIDATE
+  GENERATION, `abs_log_ratio_tE`/`delta_spread` the leading
+  candidates).
+- Rescue-family associations (Phase E): **DIAGNOSTIC / CANDIDATE
+  GENERATION**. The single strongest cell (`physical` mode x
+  `Tobs_over_tE`, AUC≈0.838) is specifically tagged **CANDIDATE
+  HYPOTHESIS — NOT VALIDATED**: it comes from only 4 rescued events
+  and is the best of 60 inspected (feature x mode) `DIAGNOSTIC`
+  cells, so it is exactly the kind of result likely to look stronger
+  than it is. `log_te_rho` is **INCONCLUSIVE** throughout (too few
+  residual events rescued by it in either class, for every feature).
+- Scientific-risk stratification (Phase C): **ACCEPTED as a risk
+  read** for `extreme100` on `piE_true, tE_true, rho_true,` and
+  brightness — no strong concentration detected. `abs_u0_true`:
+  **mild/moderate concentration, monitor.** Blending: **INCONCLUSIVE
+  / NOT ASSESSABLE** — `extreme100` has essentially no variation in
+  `source_fraction` (constant 1.0 at the median, saturated at 1.0 for
+  75/100 at the minimum), so this check has no power to detect a
+  blending-driven risk even if one existed; it is not evidence that
+  none exists.
+
+**10. Consequence**
+
+- **B2 should use B1's fixed-cost fit diagnostics
+  (`abs_log_ratio_tE`, `delta_spread`) as its primary evidence for
+  adaptive routing.** B1c does not justify adding a standalone
+  pre-H0 simulation-aware classifier at N=100: the tested core
+  feature block, evaluated on its own (scenario A) or added en bloc
+  to B1's diagnostics (scenario C), did not improve on B1's own
+  diagnostic model and degraded CV performance at N=100 (scenario C <
+  scenario B at every k tested). This is a statement about the
+  specific feature block and models tested here, at this sample size
+  — it does not claim that no individual pre-H0 simulation feature
+  could add value under a different design, a different feature
+  selection, or a larger sample; that has not been tested, and this
+  experiment deliberately does not re-search `extreme100` for a
+  better-performing subset (that would be retuning on the development
+  set, not evidence).
+- The `physical`-mode rescue association (`Tobs_over_tE` AUC≈0.838,
+  `log10_rho_true` AUC≈0.750) is a **CANDIDATE HYPOTHESIS — NOT
+  VALIDATED**, not a rule: it rests on only 4 rescued events out of 21
+  residual events, and it is the strongest result among many
+  (feature x mode) combinations inspected (60 `DIAGNOSTIC` cells in
+  `b1c_rescue_family_associations.csv`), which is exactly the setting
+  where the single best-looking cell is expected to look better than
+  it is. **B2 must not adopt it automatically as a tie-breaker or
+  routing rule from this result alone** — it may be worth testing
+  explicitly in B2 as one candidate among others, evaluated against
+  the oracle like any other trigger. `log_te_rho` remains
+  **INCONCLUSIVE** (too few residual events rescued by it to assess
+  at all).
+- No production, core-fitter, or SLURM changes result from this
+  experiment. It remains fully offline, `extreme100` development-set
+  evidence.
+- This negative result should not be silently dropped if B2 or a
+  later Gate 3 sample is examined: a genuinely larger sample (Gate 3's
+  200-500 events) may reveal pre-H0 signal that N=100 cannot resolve,
+  particularly for the rescue-family question, whose classes are
+  currently too small to test at all for `log_te_rho` and barely
+  testable for `physical`.
+
+**11. Next step**
+
+Proceed to Phase B2 design using B1's fixed-cost diagnostics as the
+primary basis (per Experiment B1's own §11), not a simulation-aware
+front-end. If Gate 3's independent sample is later assembled, re-run
+this same B1c pipeline on it (same script, `--root` pointed at the new
+sample's local artifacts) before deciding whether simulation-aware
+routing deserves a second look — do not re-tune B1c's features on
+`extreme100` in the meantime.
+
+---
+
 ## 2. Reference: `gate1_oracle_diagnostics.csv` schema
 
 Regenerated by `aggregate_gate1_oracle_diagnostics.py` (re-run,
