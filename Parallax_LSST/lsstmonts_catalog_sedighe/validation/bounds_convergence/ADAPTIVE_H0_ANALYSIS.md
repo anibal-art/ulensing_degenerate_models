@@ -606,8 +606,9 @@ true per-start runtime.
 **not** a true per-start runtime and must only be reported as a
 secondary/approximate cost metric, explicitly labelled as such. `N_fits`
 (count of H0 optimizations run) is the primary cost metric for Phase
-A/B until Gate 3 adds real per-fit timing (and, if feasible,
-`nfev`/`njev`) to the fitter itself.
+A/B until Gate 3B (§5 below) adds real per-fit timing (and, if
+feasible, `nfev`/`njev`) to the fitter itself, on the machine/cluster
+production will actually run on.
 
 ---
 
@@ -619,3 +620,107 @@ freeze a candidate policy, not sufficient to call it validated for
 production. Once a policy is selected on `extreme100`, it must be
 frozen (no further threshold tuning) and re-evaluated on an
 independent 200-500 event sample — this is Gate 3 and has not started.
+
+---
+
+## 5. Cluster-production reproducibility and profiling status
+
+**This section is a status/limitation statement, not an experiment.**
+No profiling is run here; it records what is and is not currently
+known about production runtime, and defers the actual measurement to
+an explicitly named future gate.
+
+### 5.1 What the current wall-time numbers are, and are not
+
+Every wall-time number referenced anywhere in this document or in
+`gate1_oracle_call_wall_times.csv` (and the `wall_*` columns derived
+from it, e.g. in `gate1B_final18_per_event.csv`) is a **historical,
+approximate diagnostic**, not a characterization of the production
+fitter:
+
+- it was measured on whatever local machine happened to run each
+  Gate-1 validation call (see `ROOTS` in
+  `aggregate_gate1_oracle_diagnostics.py` — local `~/Downloads/...`
+  directories), not on the cluster hardware production will actually
+  run on;
+- it is call-level, not per-fit/per-start (§3);
+- part of the historical CHE profiling this project has referenced in
+  the past corresponds to **earlier versions of the pipeline** (prior
+  bounds, prior start plans, prior coordinate/x_scale handling) and
+  must **not** be read as profiling of the H0/H1 fitter configuration
+  this document is currently validating. Any number carried over from
+  that earlier profiling is diagnostic-only context, never a
+  production benchmark.
+
+**There is currently no final characterization of the runtime of the
+production fitter.** In particular, none of the following are known
+with production-grade confidence yet: wall time per event at
+production scale, cluster throughput, total wall-clock time for the
+full simulated population, or how runtime scales with the number of
+concurrent workers.
+
+### 5.2 Why profiling must be repeated, and when
+
+Cluster profiling is only meaningful once it measures the fitter
+configuration that will actually ship. Every one of the following is
+still an open decision in this document (§0.2, §18 of
+`VALIDATION_STATUS_2026-09-14.md`) and each one can change the number
+and cost of fits per event, so profiling done before all of them are
+frozen would have to be redone anyway:
+
+- the H0 adaptive policy (Phase A/B of this document — not yet
+  designed);
+- the H1 start strategy (currently 5 fixed starts, §0.1, but not
+  frozen against further evidence);
+- nested-H0-in-H1 handling / how the embedded-H0 candidate is stored
+  and reported (§0.1, §15 of the checkpoint);
+- the shared and H1-specific bounds (`production_candidate`, §0.1);
+- the final production outputs/diagnostics the fitter writes per
+  event (raw vs. nested H1 chi2, optimizer diagnostics kept, etc.).
+
+**No final decision about production compute resources, wall-clock
+budget, or total expected production duration may be made from the
+historical profiling data currently in this repository.** Any such
+statement made informally in discussion (e.g. rough past estimates
+from CHE runs) is provisional context only, not a commitment.
+
+### 5.3 GATE 3B — Production profiling (not started)
+
+A dedicated profiling gate, run only after the fitter configuration
+above is frozen (i.e. after Phase A/B conclude and are accepted, and
+the resulting policy is written into the actual production code
+path — not just validated offline). This is distinct from Gate 3
+(§4), which re-validates scientific correctness (`delta_chi2`
+coverage) on an independent 200-500 event sample; Gate 3B measures
+**operational cost**, not scientific correctness, though it should
+reuse the same frozen fitter and, where practical, the same
+independent sample.
+
+Gate 3B must measure, on the actual cluster/hardware production will
+run on:
+
+- wall time per event (end-to-end, including all H0 and H1 starts and
+  any rescue);
+- wall time per fit/start, individually, if the fitter can be
+  instrumented to record it (current per-call-only timing, §3, is not
+  sufficient for this);
+- `N_fits` actually executed per event, separately for H0 and H1
+  (including rescues);
+- runtime distribution: p50 / p90 / p95 / p99, not just the mean;
+- CPU usage per event/worker;
+- peak memory usage;
+- I/O (read of photometry/catalog inputs, write of per-event outputs);
+- `nfev` / `njev` (function/Jacobian evaluation counts) from the
+  optimizer, if obtainable, as a hardware-independent complement to
+  wall time;
+- how runtime varies with event type/difficulty (e.g. large tE, large
+  rho, events that trigger the t0 rescue or any future H0 rescue);
+- scaling of throughput with number of concurrent workers;
+- resulting throughput in events/hour at the chosen worker count;
+- an estimate of total wall-clock time for the full production
+  population, derived from the above, not from historical numbers.
+
+**Status: NOT STARTED.** This section documents Gate 3B as a required
+future stage; it does not run any profiling itself. Do not treat the
+existing `gate1_oracle_call_wall_times.csv` numbers, or any prior CHE
+profiling of earlier pipeline versions, as a substitute for it.
