@@ -30,6 +30,7 @@ sys.argv = ["run_bounds_audit_refit_core.py", "--catalog-row", "71181",
 
 import pandas as pd  # noqa: E402
 import run_bounds_audit_refit_core as core  # noqa: E402
+import fit_lc  # noqa: E402
 from load_new_event import load_new_case  # noqa: E402
 from fit_two_policy import run_two_fit_policy  # noqa: E402
 
@@ -44,7 +45,7 @@ for _, row_entry in manifest.iterrows():
     meta = load_new_case(h5_path, core)
 
     event_wall0, event_cpu0 = time.time(), time.process_time()
-    r = run_two_fit_policy(meta, core)
+    r = run_two_fit_policy(meta, core, fit_lc)
     r["event_wall_s"] = time.time() - event_wall0
     r["event_cpu_s"] = time.process_time() - event_cpu0
 
