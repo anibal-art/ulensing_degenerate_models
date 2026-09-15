@@ -2662,12 +2662,17 @@ Traced `old_H0` (→ `TRF_FSPL_NoParallax.npy`) and `old_final`
 `~/microlensing/simulation_Rubin/roman_rubin/functions_roman_rubin.py`
 (`sim_fit_multi_fits`) and `fit_lc.py`. Findings:
 
-- `old_H0` = 1 TRF fit, start = truth, old narrow bounds (t0=truth±30d,
-  u0=±1, tE∈[0.1,20000], rho∈[1e-7,10]).
-- `old_final` = FAST's H1 multistart: a 3×3 piE-fraction grid
-  (`[-0.5,0,0.5]²` around the embedded-H0 center, **each grid point a
-  real TRF fit**, not a forward evaluation) + one TRF polish of the
-  winner, old narrow piE bounds (half-width 1.9973/2.201096).
+- `old_H0` = **exactly 1** real nonlinear-optimizer (TRF) call, start
+  = truth, old narrow bounds (t0=truth±30d, u0=±1, tE∈[0.1,20000],
+  rho∈[1e-7,10]). No forward-only part.
+- `old_final`: re-audited in this checkpoint (§0 correction below) —
+  **exactly 10 unconditional real TRF calls** (the grid) **+ 0 or 1
+  conditional real TRF call** (the polish), i.e. **10-11 real
+  optimizer calls total, not ~1**. None of it is forward-only. See
+  the corrected breakdown immediately below — the original text here
+  said "≈1 TRF-equivalent for `old_final`'s grid+polish" in the same
+  paragraph that also said "each grid point a real TRF fit", which is
+  self-contradictory; that was a documentation error, now fixed.
 - Only the raw parameter vectors are consumed downstream
   (`old_h0[:4]`, `old_h1` full 6-vector) — `old_h0_chi2`/`old_h1_chi2`
   are print-only diagnostics, never used in any control-flow decision.
@@ -2675,11 +2680,50 @@ Traced `old_H0` (→ `TRF_FSPL_NoParallax.npy`) and `old_final`
   vector is just an initial guess, fully re-optimized under
   `production_candidate` bounds by the frozen fitter.
 
-**Conclusion: legacy-seed generation is real, bounded overhead (≈2 TRF
-optimizations/event: 1 for `old_H0`, ~1 TRF-equivalent for
-`old_final`'s grid+polish), not eliminable by re-deriving it under new
-bounds — the seed is a genuine converged point of a *different* search,
-not a deterministic function of truth/catalog data.**
+**Correction (this checkpoint): exact `old_final` call count,
+traced from `run_lsstmonts_catalog_hidden_parallax.py`
+(`install_h1_parallax_grid_multistart_runtime_patch`), no new fits
+run to determine this — read-only trace of the historical producer
+and its config (`configs/validation/lrt_benchmark/FAST.json`):**
+
+- Candidate grid: `piE_grid_fractions=[-0.5,0,0.5]` → 3×3=9 grid
+  points, plus `include_exact_H0_center=true` adds a 10th
+  (`center_full`) point at exactly `(0,0)`. `include_auto_center=true`
+  means the grid's own `(0,0)` point is **not** deduplicated against
+  `center_full` — both are kept as distinct candidates. **→ 10
+  candidates.**
+- Each candidate is run through `base_multi(...)` → `sim_fit` →
+  `fit_rubin_roman` with `initial_guess=start_guess` — **a genuine,
+  unconditional, real TRF optimization for every one of the 10**, not
+  a forward/cheap evaluation. Confirmed by direct code trace
+  (`H1_multistart` candidate loop), not inferred.
+- After the loop, `polish_winner="adaptive"` (FAST.json's actual
+  setting): a further real TRF call, from the coarse winner's full
+  solution vector with tighter tolerances
+  (`xtol=ftol=1e-12` vs the grid's default), is run **only if** the
+  coarse winner's `optimizer_optimality` is non-finite or exceeds
+  `polish_optimality_threshold=0.05` — i.e. **conditionally 1
+  additional real TRF call, not unconditionally, and not zero either**
+  (this session did not re-run the historical production data to
+  measure how often the threshold actually triggered, since that
+  would require new fits; the correct statement is "0 or 1 depending
+  on the coarse winner's fit quality", not a fixed number).
+- **"TRF-equivalent" in the superseded text was not a wall-time
+  measurement** — no wall-time profiling of the historical `old_final`
+  production run was performed in this or any prior session. It was
+  an unjustified cost simplification and has been removed.
+
+**Corrected conclusion: legacy-seed generation, if it had to be
+reproduced from scratch for a new event, costs 1 real TRF call for
+`old_H0` + 10-11 real TRF calls for `old_final` ≈ 11-12 real
+optimizer calls/event — not the "≈2 TRF/event" this section
+previously claimed.** This is a **documentation-only correction**: it
+does not touch or weaken §7.3's exact MILP result (`minimum true H0
+cost = 19`), because that MILP's "bridge" is `old_H0` alone (cost 1) —
+`old_final` was never part of the H0 cost model; it only ever fed
+H1's `old_final_reseed`, accounted separately in the H1 policy
+(§6/`controlled5`). No legacy fit was run to produce this correction —
+it is a code/config trace only.
 
 ### 7.2 Self-seeding: reuse already-paid fits instead of a legacy stage — CLOSED, FAIL
 
@@ -2892,9 +2936,15 @@ conditions that would have justified keeping this direction.**
 
 - Fixed robust H0 policy (`gate1_final18` + bridge): **19 TRF**,
   exact minimum (§7.3), ≈439s measured per 100 events (mean full-TRF
-  wall time ≈0.23s, averaged across the 4 coordinate modes).
-- H1 `controlled5` + t0 rescue: unchanged from §6, 5 TRF nominal
-  (+ conditional widened re-run).
+  wall time ≈0.23s, averaged across the 4 coordinate modes). §8
+  later finds an exact 16-TRF architecture that supersedes this.
+- H1 `controlled5` + t0 rescue: **5 TRF nominal is the current-policy
+  fit cost only** (running `controlled5` on an event that already has
+  a usable `old_final` vector to reseed from) — it is **not** the true
+  deployable-from-scratch cost for a new event. See §9 for the
+  corrected accounting; the "5 TRF nominal" figure here was accurate
+  as written but is easy to misread as the total H1 cost, which it
+  never was.
 - No cheaper alternative to either was found in this session.
 
 **Next step:** morphology-informed H0 starts — see §8.
@@ -3049,3 +3099,197 @@ parameter above was frozen before M5 was run.
 **Cost so far this section:** 0 TRF for M0-M6 (pure forward/offline
 work) + 48 TRF for M7 = **48 new TRF fits total**, all confined to the
 12 critical events, none on the other 88.
+
+### M8-extension — structural capacity check before extending to `extreme100` (no new fits)
+
+Before running the other 88 events, the 48 already-existing M7 fits
+were turned into **4 new standalone strategies** —
+`morphology/{physical,log_te,log_rho,log_te_rho}` (cost=1 each, no
+`old_H0` bridge dependency) — and re-solved with the same exact,
+HiGHS-proven dependency-aware MILP from §7.3, extended with these 4
+columns. For the 88 not-yet-tested events, two bracketing scenarios
+were solved exactly: **Scenario P** (pessimistic: morphology coverage
+= False for all 88, real observed coverage for the 12 tested) and
+**Scenario O** (optimistic lower bound: coverage = True for all 88,
+tested-12 coverage never overridden). Preregistered decision rule:
+`optimistic ≥ 19` → close without testing the 88 (Case A);
+`pessimistic < 19` → the already-observed rescues alone are
+structurally sufficient, extend to the full 100 (Case B);
+`pessimistic = 19` but `optimistic < 19` → depends on the untested 88,
+extend to justify (Case C).
+
+Result: **Scenario P (pessimistic) = 18 < 19** (replacing 2 of
+`gate1_final18`'s `old_H0`-anchored strategies with 1 morphology
+strategy, `log_te_rho`). Force-no-bridge was infeasible under both
+scenarios (7/12 critical events are, in reality, uncovered by any
+morphology mode, independent of any assumption about the other 88, so
+the bridge cannot be eliminated even optimistically). **Case B: the
+decision to extend to `extreme100` did not depend on any assumption
+about the untested events — it was already proven by the 12 tested
+ones alone.**
+
+### Extension to the full `extreme100` (352 new TRF fits: 88 × 4 modes)
+
+Exactly the same frozen procedure as M7 (rank-1 morphology candidate,
+full convergence, `production_candidate` bounds, current
+`bounded_flux_profile`, one process per coordinate mode), run on the
+remaining 88 events (`run_h0_morphology_trf_remaining88.py`). No new
+morphology definition, no rank-2/3, no new width levels, no smoothing
+or lookup-grid change, no GP, no scouts, no Fisher, no classifier, no
+new coordinate parametrization — the only new "strategy family" is
+the one already frozen: rank-1 morphology start × the 4 existing
+modes.
+
+**Audit (`audit_and_combine_morphology100.py`): PASS.** 400/400
+records (100 events × 4 modes), zero duplicates, zero missing/extra
+combinations, every row's initial vector verified to match the frozen
+rank-1 morphology candidate for its event exactly, all 400 fits
+`status=success`, combined into
+`results/h0_morphology_trf_all100.csv`.
+
+**Coverage (`analyze_morphology100_coverage.py`), 100 events:**
+
+| mode | N covered/100 | N(Δ>0.1) | N(>1) | N(>10) | worst |
+|---|---|---|---|---|---|
+| physical | 43 | 57 | 47 | 33 | 118114 |
+| log_te | 40 | 60 | 48 | 32 | 81463 |
+| log_rho | 35 | 65 | 55 | 35 | 463929 |
+| log_te_rho | 21 | 79 | 68 | 43 | 29544 |
+
+**Union coverage (≥1 mode) = 63/100.** Unique (non-redundant)
+contributions: physical 6, log_te 3, log_rho 8, log_te_rho 3;
+43/100 events are covered redundantly by ≥2 modes — running all 4
+modes is not simple duplication, each contributes real, distinct
+coverage. Split: critical(12) union = 5/12 (unchanged from M7); the
+other 88 = **58/88 (66%)**, markedly higher than the critical group's
+rate, consistent with "critical" being specifically the events where
+truth-anchored search already failed hardest.
+
+**Final exact MILP** (`h0_exact_milp_final_with_morphology100.py`,
+real 100-event coverage, no assumptions, bridge-vector free-coverage
+option included exactly as in §7.3, HiGHS `status=0`/proven optimal):
+
+- **Exact minimum total H0 TRF cost = 16** (down from the baseline
+  19; the 18-pessimistic bound from the P/O check is now superseded
+  by this exact, assumption-free result).
+- Selected: 15 downstream strategies + bridge = **16**. Composition:
+  7 truth-anchored, 6 `old_H0`-anchored, **2 morphology**
+  (`morphology/log_rho`, `morphology/log_te_rho`).
+- **`old_H0` bridge remains required** (6 `old_H0`-anchored strategies
+  still selected). `force bridge=0` with the real, fully-observed
+  100-event morphology coverage is **exactly infeasible**
+  (HiGHS-proven, not assumption-based this time) — morphology, even
+  now fully tested, cannot eliminate the legacy `old_H0` dependency,
+  only reduce the downstream cost around it.
+- Relative to the original 18-strategy `gate1_final18`: 5 strategies
+  drop out (`log_rho/truth/1e-06`, `log_te/old_H0/0.01`,
+  `log_te/old_H0/0.1`, `log_te_rho/truth/1e-06`, `physical/truth/1`),
+  replaced by the 2 morphology strategies — net −3 in strategy count,
+  −3 in total cost (19→16).
+
+**352 new TRF fits were run in this extension** (88 × 4); combined
+with M7's 48, morphology's total footprint in this investigation is
+**400 TRF fits**, none of it touching the other 88 events' truth or
+`old_H0` reference computations (those were already-existing oracle52
+data, reused read-only throughout).
+
+### Freeze — H0 strategy-family search closed
+
+Per the explicit stop rule for this cycle: **the search for new H0
+strategy families on `extreme100` is closed here.** No further
+morphology variants (candidate rank ≥2, alternative width thresholds,
+different smoothing, a re-tuned lookup grid, GP, classifiers) will be
+tried, even though 37/100 events remain uncovered by the current
+morphology family — that gap is accepted, not chased further in this
+cycle.
+
+**H0 candidate architecture to carry into independent Gate 3
+validation:** the exact-cost-optimal 16-strategy set above (7 truth +
+6 `old_H0` + 2 morphology, + the shared `old_H0` bridge), superseding
+`gate1_final18`'s 19-cost architecture as the current best-known,
+exactly-verified-on-`extreme100` H0 policy. This is a candidate for
+independent validation, not yet a frozen production policy — the same
+"CANDIDATE — FROZEN FOR INDEPENDENT VALIDATION" discipline used for B2
+and `controlled5` applies once this is formally adopted as the H0
+policy (not done automatically by this checkpoint; a deliberate
+freeze step, analogous to B2's, is still needed before Gate 3 can use
+it).
+
+---
+
+## 9. Corrected H1 deployment-cost accounting (documentation only — no new H1 fits)
+
+**Trigger:** §7.1's correction of `old_final`'s real producer cost
+(10 unconditional + 0-1 conditional real TRF calls, not "~1
+TRF-equivalent") changes the interpretation of H1's true deployment
+cost for a *new* event, even though nothing about `controlled5`
+itself changed. This section makes that distinction explicit
+everywhere it matters. **No H1 fit was run to produce this
+correction** — it is a direct consequence of §7.1's code trace,
+applied to the H1 side of the same legacy-seed problem.
+
+### Two different numbers, previously conflated
+
+**Current-policy fit cost** — what `controlled5` costs *given that an
+event already has a usable `old_final` vector* (true for every
+`extreme100` development event, since all of them carry the
+historical legacy artifacts):
+
+> `controlled5` = **5 current-bounds H1 TRF optimizations**
+> (`truth`, `H0_NESTED_piE_0`, `truth_half_piE`,
+> `truth_mirror_u0_piEN`, `old_final_reseed` — the last one re-seeded
+> from the existing `old_final` vector and re-optimized under
+> `production_candidate` bounds by the frozen fitter). This is the
+> number used correctly throughout §6 and §7 for `extreme100` work.
+
+**Deployable-from-scratch prerequisite cost** — what `controlled5`
+actually requires for a genuinely **new** event (e.g. a Gate 3 event)
+that has no pre-existing `old_final` artifact:
+
+> `controlled5` (5) **+ 10-11 legacy H1 TRF optimizations** to
+> fabricate `old_final` from scratch (§7.1's corrected count: the
+> FAST 3×3+1 grid, all real TRF calls, plus the conditional polish) =
+> **15-16 real TRF optimizations for H1 alone**, not 5.
+
+The `old_H0` bridge (1 TRF, needed to fabricate `old_H0` itself,
+which `old_final`'s grid embeds as its center) is **shared with H0**
+if H0's own bridge has already been paid for that event — it must
+**not** be double-counted in a combined H0+H1 per-event budget. A
+combined from-scratch H0+H1 budget for one new event is therefore
+approximately:
+
+> `H0 (16, §8, includes 1 bridge) + H1 downstream (5 controlled5 + 10-11
+> old_final grid+polish) = ~31-32 real TRF optimizations/event`,
+> of which only **1** (the shared `old_H0` bridge) is common to both
+> hypotheses — not `19 + 5 = 24` as a naive pre-correction estimate
+> would have suggested, and not `16 + 5 = 21` either.
+
+### Why this matters now
+
+Before this correction, the working assumption was that legacy-seed
+overhead was small (≈2 TRF/event total, H0+H1 combined) and that H0's
+`old_H0` dependency was therefore the dominant open cost problem.
+**That is no longer true.** `old_final`'s real cost (10-11 TRF) is
+larger than H0's entire exact-optimal downstream budget (15,
+excluding bridge, per §8) and larger than `controlled5` itself (5).
+**H1 legacy-seed removal/replacement is, after this correction, the
+larger of the two deployment-cost problems facing Gate 3** — larger
+in absolute TRF count than anything still open on the H0 side.
+
+### What is already closed and must not be repeated
+
+The corrected fixed-backbone `current_H0_grid_reseed` test (§7.2)
+remains **CLOSED — FAIL**: it does not become more attractive under
+this cost correction, because its failure mode (the grid collapses to
+the exact center, rescuing nothing beyond `H0_NESTED_piE_0`, already
+in `controlled4`) is structural, not a cost artifact. **Do not repeat
+it.** Whatever eventually replaces `old_final_reseed` will have to let
+`(t0,u0,tE,rho,piEN,piEE)` co-adapt during the search, exactly as the
+§7.2 root-cause finding already established.
+
+### Left open, not resolved here
+
+This section documents the corrected cost, it does not solve it. No
+H1 self-seeding, scouting, Fisher, or morphology variant was tried or
+re-tried for H1 in this session. That is explicitly the next
+open problem for a future session, not started here.
