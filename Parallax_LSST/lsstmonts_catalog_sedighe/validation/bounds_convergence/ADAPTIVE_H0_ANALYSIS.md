@@ -1639,6 +1639,262 @@ routing deserves a second look — do not re-tune B1c's features on
 
 ---
 
+### Experiment B2 — Minimal conservative H0 adaptive-policy closure (CANDIDATE — FROZEN FOR INDEPENDENT VALIDATION)
+
+**Status: CANDIDATE — FROZEN FOR INDEPENDENT VALIDATION.** A single,
+minimal policy is identified that achieves zero false-safe on
+`extreme100` with a modest (not large) reduction in mean H0 cost. The
+exact policy (§4, §9) is now frozen -- Gate 3 evaluates it as-is, and
+does not retune it (see §10 for exactly what "frozen" requires if
+Gate 3 finds a failure). The threshold is fit exactly to the hardest
+development-set case (§7-§8) and could plausibly fail on new data;
+that is precisely what Gate 3 must test.
+
+**Exact frozen policy (full precision; every other occurrence of this
+number in this document is rounded for readability):**
+
+```
+k = 6
+base set = results/b1_fixed_budget_candidate_sets.csv, k=6, candidate_rank=1
+predictor = abs_log_ratio_tE  (computed from the k=6 base set's own fits)
+rule: if abs_log_ratio_tE >= 0.0004123330728713: complete gate1_final18
+                                                  (+ validated t0 rescue
+                                                   when triggered)
+      else: STOP, report the k=6 base set's own winner
+```
+
+This exact triple `(k=6, abs_log_ratio_tE, 0.0004123330728713)` is
+pinned in code as `FROZEN_B2_POLICY_*` in
+`analyze_b2_h0_policy.py`, with a consistency check
+(`assert_frozen_policy_matches_computed_threshold`) that fails loudly
+if it ever stops matching a fresh computation from the same inputs,
+rather than silently drifting.
+
+**1. Question**
+
+Does a small fixed H0 base set (k=4, 5, or 6, from Experiment B1's
+own `candidate_rank==1` sets, not re-optimized) plus a simple
+threshold rule on Experiment B1's fixed-cost fit diagnostics
+reproduce the validated H0 reference (`gate1_final18` + validated t0
+rescue) within `delta_opt<=0.1` for every `extreme100` event, at a
+lower mean H0-fit cost than always running the full 18-strategy plan?
+
+**2. Motivation**
+
+Direct continuation of Phase B (Experiment A1 §9, Experiment B1 §11):
+this is the first concrete attempt at an actual policy, deliberately
+scoped as a single, minimal, conservative iteration so that H0 can be
+frozen and the project can move to H1/Gate 3/production without
+another open-ended exploratory phase.
+
+**3. Inputs**
+
+- `results/b1_predictors_per_event.csv` (Experiment B1;
+  `candidate_rank==1`, k∈{4,5,6} only: `chi2_best`,
+  `abs_log_ratio_tE`, `delta_spread`, plus `chi2_std_among_set`,
+  `chi2_range_among_set`, `n_modes_agreeing` inspected only as a
+  clear-improvement check, not a new search).
+- `results/b1_fixed_budget_candidate_sets.csv` (Experiment B1; to
+  confirm, not re-derive, that each k's candidate is a subset of
+  `gate1_final18`).
+- `results/a1_sequential_h0_full18_policy.csv` (Experiment A1;
+  `chi2_policy_final` — the validated reference this policy tries to
+  reproduce cheaply — and `rescue_applied`, for N_fits accounting).
+- New script:
+  `validation/bounds_convergence/analyze_b2_h0_policy.py`.
+
+**4. Method**
+
+*Reference, precisely.* `chi2_policy_final` from Experiment A1 — the
+`gate1_final18` full-18 winner, with the already-validated t0 rescue
+applied when (and only when) that winner's own `active_mask` shows
+`t0` active. This is **not** `chi2_oracle_52`; per Experiment A1 §5,
+the two references must not be conflated.
+
+*N_fits accounting, verified not assumed.* Confirmed in this session,
+programmatically, that every one of the k=4/5/6 `candidate_rank==1`
+strategy sets is a **subset** of `gate1_final18`'s own 18 strategies
+(`analyze_b2_h0_policy.py:verify_subset_of_final18`, run against the
+actual candidate lists — 4/4, 5/5, 6/6 members found in
+`gate1_final18`). Therefore a SAFE decision costs `k` fits; an
+ESCALATE decision costs `18` fits total (the `k` already spent are
+reused, not duplicated), plus `18` more for the one `extreme100`
+event whose full-18 winner triggers the t0 rescue (`catalog_row
+36103`, per Experiment A1). Because escalation always completes the
+exact validated reference procedure, an escalated event's resulting
+`delta_opt` is `0` by construction — `N(delta_opt>0.1)` after a
+policy is applied equals exactly that policy's `N_false_safe`, with
+no additional failure mode from escalation itself.
+
+*Threshold selection (design-time use of the reference, never a
+runtime feature).* For each predictor P found positively associated
+with risk (`delta_spread`, `abs_log_ratio_tE` — the two mandated
+predictors — plus `chi2_std_among_set`, `chi2_range_among_set`,
+`n_modes_agreeing`, checked only for a clear improvement), the
+minimal zero-false-safe threshold is `t* = min(P over
+delta_vs_reference>0.1 events)`, rule "escalate if `P >= t*`". This
+is the cheapest single-threshold rule that catches every
+development-set risky event; also tested, the simple OR of the two
+primary predictors' individual thresholds. No joint/grid optimization
+beyond this was performed (per instruction, to keep the rule
+auditable and avoid a new open search).
+
+**5. Information allowed in the policy**
+
+Every rule's "escalate" condition is a function only of the k base
+fits already run (`abs_log_ratio_tE`, `delta_spread`, etc., all
+already validated in Experiment B1 as computable from a fixed
+candidate set's own fits). `chi2_policy_final` / `chi2_oracle_52` /
+`catalog_row` are used only to (a) select the threshold at design
+time and (b) evaluate the resulting policy offline — never inside a
+rule's escalate condition.
+
+**6. Metrics**
+
+Per policy: `frac_stopped_at_base`, `frac_escalated`, `n_false_safe`,
+`N(delta_opt>0.1/1/10)`, `max_delta_opt`, `mean/p50/p90/max N_fits`,
+exact rule text.
+
+**7. Results**
+
+*Verification:* k=4 (4 strategies), k=5 (5), k=6 (6) candidates are
+each fully contained in `gate1_final18`'s 18 — confirmed
+programmatically, not assumed.
+
+*Threshold search* (`results/b2_policy_threshold_search.csv`): for
+**every** predictor tested, at **every** k, the minimal zero-false-safe
+threshold is forced down to a near-numerical-floor value by a single
+recurring event, **`catalog_row=35927`**: at k=4/5/6 its
+`delta_vs_reference` is a constant `0.343` (its winning candidate
+strategy does not change as k grows from 4 to 6), while its
+`delta_spread` (`0.000676`) and `abs_log_ratio_tE` (`0.000412`) are
+10-100x smaller than the next-smallest risky event's — i.e. multiple
+strategies in its own candidate set converge to the *same*,
+slightly-wrong local minimum, so the fit "looks" fully converged and
+confident despite being `0.34` above the reference. Because of this
+single case, achieving zero false-safe forces large escalation
+fractions for every tested predictor (**thresholds below are rounded
+for display**; full precision is in
+`results/b2_policy_threshold_search.csv` and, for the frozen k=6
+policy specifically, in the exact box above):
+
+| k | predictor | min-risky threshold | n_escalate/100 |
+|---|---|---:|---:|
+| 4 | `abs_log_ratio_tE` | 0.000412 | 81 |
+| 4 | `delta_spread` | 0.000676 | 87 |
+| 4 | `chi2_std_among_set` | 0.021 | 99 |
+| 4 | `chi2_range_among_set` | 0.055 | 99 |
+| 4 | `n_modes_agreeing` | 1 | 100 |
+| 6 | `abs_log_ratio_tE` | 0.000412 | 75 |
+| 6 | `delta_spread` | 0.000676 | 82 |
+
+`n_modes_agreeing`, `chi2_std_among_set`, `chi2_range_among_set` are
+all **worse** than the two mandated predictors (97-100% escalation) —
+no clear improvement found among the additionally-inspected B1
+diagnostics.
+
+*Policy comparison* (`results/b2_policy_comparison.csv`, full 19-row
+table):
+
+| policy | k | rule | frac stopped | mean N_fits | p50/p90/max N_fits | N(delta_opt>0.1) | max delta_opt |
+|---|---|---|---:|---:|---|---:|---:|
+| fixed baseline | — | always run gate1_final18 (+t0 rescue) | 0.00 | **18.18** | 18/18/36 | 0 | 0 |
+| best single, k=4 | 4 | `abs_log_ratio_tE >= 0.000412` | 0.19 | 15.52 | 18/18/36 | 0 | 0.030 |
+| best single, k=5 | 5 | `abs_log_ratio_tE >= 0.000412` | 0.20 | 15.58 | 18/18/36 | 0 | 0.030 |
+| **best single, k=6** | **6** | **`abs_log_ratio_tE >= 0.000412`** | **0.25** | **15.18** | 18/18/36 | **0** | **0.021** |
+| OR rule, k=6 | 6 | `abs_log_ratio_tE>=0.000412 OR delta_spread>=0.000676` | 0.12 | 16.74 | 18/18/36 | 0 | 0.00003 |
+
+The OR rule is **strictly worse** (higher mean N_fits) than
+`abs_log_ratio_tE` alone at every k tested — `delta_spread`'s
+threshold adds escalations without catching any risky event
+`abs_log_ratio_tE` did not already catch. `N(delta_opt>1)` and
+`N(delta_opt>10)` are `0` for every policy in the table (full table:
+`results/b2_policy_comparison.csv`). Every policy's `p50`/`p90`/`max
+N_fits` are unchanged from the fixed baseline (`18`/`18`/`36`) —
+escalation dominates the majority of events for every rule tested;
+only the mean shifts, and only modestly.
+
+**8. Interpretation**
+
+- The best closeable policy found is **k=6 base set, escalate if
+  `abs_log_ratio_tE >= 0.000412`**: mean N_fits `15.18` vs. `18.18`
+  fixed — a **16.5% reduction**, not the larger (5-8 mean fits)
+  reduction hypothesized at the start of Phase B. This is a real, but
+  modest, saving.
+- The saving is concentrated in the minority (25%) of events that
+  stop at the 6-fit base set; the majority still escalate to the full
+  18(+18) procedure. Median cost is unchanged.
+- The threshold is set **exactly** at `catalog_row=35927`'s observed
+  diagnostic value — the smallest margin possible while still
+  catching it. This is expected behavior for a min-over-risky
+  threshold rule, but it means the policy is tuned to the single
+  hardest case *in this specific 100-event sample*; a new sample
+  (Gate 3) could contain a different event whose diagnostics are even
+  smaller while still being risky, which would silently reintroduce a
+  false-safe failure. This is a real risk to test, not yet resolved.
+- Combining predictors (OR) does not help here: both mandated
+  predictors are forced to their respective floors by the *same*
+  event, so OR-ing them only adds each rule's independent false
+  alarms without any additional true-risk coverage.
+
+**9. Decision**
+
+**CANDIDATE — FROZEN FOR INDEPENDENT VALIDATION**: *k=6 base set +
+escalate if `abs_log_ratio_tE >= 0.0004123330728713` (else stop)*
+(exact value; rounded to `0.000412` elsewhere in prose), with
+escalation always completing `gate1_final18` and its validated t0
+rescue exactly as today. Zero false-safe and zero
+`N(delta_opt>0.1/1/10)` on `extreme100`; mean N_fits `15.18` vs.
+`18.18` fixed (16.5% reduction, i.e. roughly 3 fewer H0 optimizations
+per event — at production scale (e.g. ~300k events) this is on the
+order of ~10^6 optimizations avoided, which is why this modest
+percentage is still worth an independent-sample test). This satisfies
+the stated lexicographic priority (zero false-safe → simplicity →
+lower `E[N_fits]`) better than any other rule tested, including the
+OR combination. **This is not yet a validated production policy** —
+it is frozen exactly as stated, for Gate 3 to evaluate, not to retune.
+
+**10. Consequence**
+
+- This policy is **frozen, not adopted**: it is a candidate for Gate
+  3 to test as-is. Nothing about it (the base set, the predictor, or
+  the threshold `0.0004123330728713`) may be changed before or during
+  Gate 3 without that action itself invalidating Gate 3 as an
+  independent test (see below).
+- **If Gate 3 finds a false-safe case for this policy, while the
+  `gate1_final18 + validated t0 rescue` reference itself remains
+  correct for that event:** the conservative default is to **abandon
+  this adaptive policy** for production and produce with the fixed
+  `gate1_final18` (+ t0 rescue) reference, which does not depend on
+  this threshold at all.
+- **If instead we choose to modify the threshold (or any other part
+  of this policy) using what Gate 3 revealed:** Gate 3 has, by that
+  choice, been converted into development data — it no longer counts
+  as the independent validation this policy needs. The modified
+  policy must then be evaluated on a **new, independent sample** before
+  any production use. Retuning silently on Gate 3 and treating that
+  same run as having validated the retuned policy is not acceptable
+  and must not be done.
+- The modest size of the saving (16.5%, concentrated in 25% of
+  events) should be weighed against Gate 3B's not-yet-measured
+  per-fit wall time (§5 of this document): if per-fit cost is small
+  relative to fixed overhead, this saving may not be worth the added
+  policy complexity in production; that trade-off cannot be resolved
+  until Gate 3B actually measures wall time.
+- No production, core-fitter, or SLURM change is made by this
+  experiment. H1 is untouched (`controlled5` unchanged).
+
+**11. Next step**
+
+Per the project's stated path: H0 candidate policy proposed above →
+final H1 audit (winner bounds, t0/piE, nestedness bookkeeping, per
+checkpoint §Gate-2-pendiente) → Gate 3 independent validation
+(200-500 events, testing this exact frozen policy without retuning)
+→ Gate 3B cluster profiling → empirical H0/null LRT calibration →
+staged production.
+
+---
+
 ## 2. Reference: `gate1_oracle_diagnostics.csv` schema
 
 Regenerated by `aggregate_gate1_oracle_diagnostics.py` (re-run,
