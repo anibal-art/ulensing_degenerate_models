@@ -30,6 +30,7 @@ and it is never re-centered on the start.
 import time
 
 from morphology_seed import morphology_seed_from_curves
+from run_one_fit_full import run_one_fit_full
 
 PRODUCTION_CANDIDATE_BOUNDS = {
     "u0": [-10.0, 10.0], "tE": [0.1, 500000.0], "rho": [1.0e-7, 10.0],
@@ -52,7 +53,7 @@ def check_domain_containment(seed):
     return violations
 
 
-def run_two_fit_policy(meta, core):
+def run_two_fit_policy(meta, core, fit_lc):
     """
     meta: as returned by load_new_event.load_new_case (has
     meta["generating_model"] in {"H0","H1"}, meta["truth"],
@@ -60,10 +61,14 @@ def run_two_fit_policy(meta, core):
     core: the imported run_bounds_audit_refit_core module (with
     BOUNDS_PROFILE == "production_candidate" already set by the
     caller before import).
+    fit_lc: the imported fit_lc module (must be imported AFTER core,
+    per core.py's own sys.path side effect).
 
     Returns a dict with the 2 fit records, the morphology seed used,
     any domain-containment violation, and total optimizer-call count
-    (must always be exactly 2).
+    (must always be exactly 2). Each fit record is the FULL
+    fit.fit_results dict (via run_one_fit_full), so optimizer_nfev/
+    njev/status/message/optimality/active_mask are always retained.
     """
     assert core.BOUNDS_PROFILE == "production_candidate", (
         "the simplified architecture requires the production_candidate "
@@ -84,7 +89,7 @@ def run_two_fit_policy(meta, core):
 
     def timed_fit(hypothesis, initial, label):
         t0c, cpu0 = time.time(), time.process_time()
-        r = core.run_one_fit(meta, hypothesis, initial, label)
+        r = run_one_fit_full(core, fit_lc, meta, hypothesis, initial, label)
         return {**r, "wall_s": time.time() - t0c, "cpu_s": time.process_time() - cpu0}
 
     if gen == "H0":
