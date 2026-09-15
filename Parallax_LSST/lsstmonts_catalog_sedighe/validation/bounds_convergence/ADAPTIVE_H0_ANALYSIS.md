@@ -3390,3 +3390,140 @@ start-guessing in this session.
   (beyond truth `piE` and the current H0 final) actually determines
   that this specific low-rho / moderate-piE region is favored, rather
   than continuing to guess additional fixed starts.
+
+### H1-F — local convergence audit (`controlled4` winner, tighter tolerances)
+
+Before treating the 3 remaining events (87786, 79700, 50179, 86451 —
+wait, 4 events survived H1-A/H1-C, see previous subsection) as
+distinct-basin cases, checked whether `controlled4`'s own winning
+solution was simply under-converged. For each, took `controlled4`'s
+winning **final** vector (not its start) and ran exactly one H1 TRF
+polish from that exact point, tolerances tightened to the historical
+adaptive-polish philosophy (`xtol=ftol=1e-12`, `gtol=1e-8`, same
+`max_nfev`/`x_scale`), all 6 parameters free, same bounds/profiling.
+`run_h1_controlled4_polish.py`, `results/h1_controlled4_winner_polish_4events.csv`.
+
+| row | winner | χ² before | χ² after | improvement | Δ vs controlled5 | pass |
+|---|---|---|---|---|---|---|
+| 87786 | `H0_NESTED_piE_0` | 269.344 | 269.338 | 0.006 | 2.603 | fail |
+| **79700** | `truth_half_piE` | 133.919 | **131.689** | **2.230** | **−1.252** | **PASS** |
+| 50179 | `H0_NESTED_piE_0` | 124.563 | 124.552 | 0.011 | 0.409 | fail |
+| 86451 | `truth`/`truth_half_piE` | 301.493 | 301.493 | ~0 | 0.261 | fail |
+
+**79700 was genuinely sub-converged** — tighter tolerances alone
+close the gap and the polished point *beats* `old_final_reseed`
+itself. **79700 is no longer `old_final`-essential.** The other 3
+barely moved and proceeded to H1-F2.
+
+### H1-F2 — convergence integrity audit (correction: `status=success` ≠ stationary)
+
+An initial read of `optimizer_optimality` (0.137, 1.672, 0.001 for
+87786/50179/86451) was mislabeled "well-converged" purely because
+`status=success`. That is wrong on its face: none of these approach
+`gtol=1e-8`, and 0.137/1.672 are also far above the 0.05 reference
+threshold used elsewhere in this log for the historical adaptive
+polish trigger. This needed resolving *before* calling any of them a
+distinct basin. `run_h1_f2_convergence_audit.py`,
+`results/h1_f2_convergence_audit.csv`. For each: recovered the full
+scipy `OptimizeResult` (`status`, `message`, `nfev`, `njev`) via
+`fit_lc.fit_rubin_roman` directly (`core.run_one_fit`'s trimmed
+return dict does not carry these); computed an independent numerical
+gradient (`J^T r`, same dimensionless scaling as `fisher_engine.py`)
+at the returned point; computed a **bound-aware projected gradient**
+(zeroing components at an active bound whose gradient points further
+into the bound — the correct first-order stationarity condition,
+not the raw gradient); and, for any event whose gradient was not
+convincingly near zero, ran **one continuation** TRF from the exact
+same final vector to test empirically whether it can still descend.
+
+| row | scipy status | scipy optimality | raw grad (L∞) | bound-aware projected grad | continuation Δχ² | verdict |
+|---|---|---|---|---|---|---|
+| 87786 | 3 (`xtol`) | 0.137 | 0.0149 | 0.0149 (no active bound) | **0** (269.337642→269.337642, identical) | **genuinely stationary** |
+| 50179 | 3 (`xtol`) | 1.672 | 0.0604 | 0.0604 | **0.0055** (still descending) | **NOT confirmed stationary** |
+| 86451 | 3 (`xtol`) | 0.00098 | 1.037 (misleading — ρ at bound) | **0.00043** (ρ correctly excluded; `active_mask=[0,0,0,-1,0,0]`) | not run (already ≈0) | **genuinely stationary** (KKT-stationary at the ρ floor) |
+
+All three terminated via `xtol` (small step), never `gtol` — exactly
+why the original "well-converged" label was premature. The
+continuation run is the decisive, model-independent check: 87786 and
+86451 cannot improve further from their own final point (86451's
+large raw gradient is fully explained by ρ sitting on its lower bound,
+not by non-stationarity); 50179 still can, and its optimality stays
+large (0.142) even after one continuation. **50179 is excluded from
+further basin experiments — a real but small (Δ≈0.4) unresolved
+convergence-quality question, not established as a distinct basin,
+and deliberately not mixed with the basin-reconstruction problem.**
+**Corrected survivors: 87786, 86451.**
+
+### Block-ablation — necessity of `old_final`'s piE block
+
+`run_h1_block_ablation.py`, `results/h1_block_ablation.csv`. Baseline
+seed = `old_final` **raw** vector (proven to reach the target basin,
+since `old_final_reseed` — its current-bounds re-optimization —
+already does). Three leave-one-block-out hybrids per event
+(backbone=`(t0,u0,tE)`, `rho`, piE=`(piEN,piEE)`), each replacing
+exactly one block with `controlled4`'s polished value, everything
+else kept from raw `old_final`. Full H1 TRF, all 6 parameters free,
+standard optimizer options (not the tightened polish ones — this is a
+normal fit). **6 new TRF fits** (2 events × 3 blocks).
+
+| row | hybrid | χ² | Δ vs `old_final_reseed` | pass |
+|---|---|---|---|---|
+| 87786 | OLD_except_BACKBONE | 262.714 | −4.021 | PASS |
+| 87786 | OLD_except_RHO | 263.797 | −2.938 | PASS |
+| 87786 | **OLD_except_PIE** | 269.520 | **+2.784** | **FAIL** |
+| 86451 | OLD_except_BACKBONE | 301.232 | ~0.000 | PASS |
+| 86451 | OLD_except_RHO | 301.232 | 0.000 | PASS |
+| 86451 | **OLD_except_PIE** | 301.493 | **+0.261** | **FAIL** |
+
+Identical pattern on both events: replacing backbone or ρ alone from
+raw `old_final` never breaks basin access (both even *beat*
+`old_final_reseed` for 87786); replacing piE alone reproduces
+`controlled4`'s own (wrong) basin almost exactly. **This demonstrates
+piE necessity via leave-one-block-out perturbation around
+`old_final`'s own raw vector** — a local statement, valid as such.
+
+### H1-H — piE sufficiency test (mixed result; does not reinterpret the ablation above)
+
+`run_h1_pie_sufficiency.py`, `results/h1_pie_sufficiency.csv`.
+**Important distinction, not a contradiction of the block-ablation
+result above:** the ablation tested necessity by perturbing *one
+block away from `old_final`'s own full raw vector* — a small,
+local move. H1-H tests **sufficiency** by transplanting *only*
+`old_final`'s piE onto a vector otherwise entirely built from
+`controlled4`'s own (distant) converged backbone/ρ — a much larger,
+non-local move. These are different, complementary questions; the
+ablation result stands unmodified.
+
+Construction: `(t0,u0,tE,rho)` = `controlled4`-polished final,
+`(piEN,piEE)` = raw `old_final`. Full H1 TRF, all 6 free, standard
+options. **2 new TRF fits** (87786, 86451 only; 50179 excluded, per
+H1-F2).
+
+| row | χ² | Δ vs `old_final_reseed` | pass | final piE |
+|---|---|---|---|---|
+| 86451 | 301.232 | **≈0** | **PASS** | (0.416, 4.100) — essentially identical to `old_final_reseed`'s own final piE |
+| 87786 | 269.418 | **2.683** | **FAIL** | (−7.09, −3.42) — drifted away from *both* the seeded `old_final` piE (−0.63,−1.95) and `old_final_reseed`'s own final piE |
+
+**1/2 PASS.** `old_final`'s piE is **sufficient** for basin access on
+86451 (the fit reproduces `old_final_reseed` to near machine
+precision from a completely different backbone/ρ starting point) but
+**not sufficient** on 87786, where the optimizer — seeded with
+`controlled4`'s backbone/ρ context — pulls piE away during
+optimization and re-converges near `controlled4`'s own basin instead.
+
+**Global conclusion: `old_final` piE is necessary (block-ablation,
+both events) but not universally sufficient (H1-H, 1/2 events) — for
+at least 87786, basin access depends on the *joint* nonlinear
+context (`old_final`'s specific backbone/ρ/piE combination together),
+not on piE transplanted onto an arbitrary distant backbone.** No
+further manual hybrid starts (pairwise swaps, rho+piE hand-built
+combinations, truth or morphology hybrids, backbone-fixed grids) were
+run or are planned — per the explicit stop rule, this line of
+one-off parameter-swap experiments is closed. New H1 TRF fits this
+round: **4 (H1-F polish) + 5 (H1-F2: 3 polish re-runs with full
+diagnostics + 2 continuations, for 87786 and 50179) + 6 (block-ablation)
++ 2 (H1-H) = 17 new H1 TRF fits**, none of it a legacy-producer fit
+(on top of H1-A/H1-C's 9, documented in the previous subsection).
+**Next step (deliberately not started here):** reframe as a *cheap
+family/template-based piE-basin-localization* problem, not another
+round of individually-designed hybrid starts.
