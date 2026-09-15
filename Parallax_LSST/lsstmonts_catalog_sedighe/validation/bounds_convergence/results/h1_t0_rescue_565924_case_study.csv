@@ -1,0 +1,2 @@
+catalog_row,chi2_H0_base,chi2_H1_base,DeltaChi2_LRT_base,chi2_H0_wide,chi2_H1_wide,DeltaChi2_LRT_wide,change_in_H0,change_in_H1,change_in_LRT,nestedness_raw_wide,nestedness_violated_wide,H1_wide_winner_label,H1_wide_winner_active_mask,H1_base_winner_active_mask
+565924,454.5509375342146,111.20971612882292,343.3412214053917,454.5008836985271,109.8467339812768,344.65414971725033,-0.050053835687492665,-1.36298214754612,1.3129283118586272,-344.65414971725033,False,truth_mirror_u0_piEN,"[0, 0, 0, -1, 0, 0]","[1, 0, 0, -1, 0, 0]"

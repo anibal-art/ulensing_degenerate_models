@@ -2103,3 +2103,511 @@ run on:
 future stage; it does not run any profiling itself. Do not treat the
 existing `gate1_oracle_call_wall_times.csv` numbers, or any prior CHE
 profiling of earlier pipeline versions, as a substitute for it.
+
+---
+
+## 6. Final H1 Audit — `controlled5` freeze decision (Gate 2 closure)
+
+**Scope note:** this document's title and Experiment log (§1) are
+H0-specific; this section is the one exception, added here (rather
+than in a new file) because it is the direct next step after
+Experiment B2 and closes the same overall Phase-B-to-Gate-3 arc. It
+audits H1's already-run `controlled5` fits (checkpoint
+`VALIDATION_STATUS_2026-09-14.md` §9-16); it proposes no new H1
+search.
+
+**Status: CANDIDATE — FROZEN FOR INDEPENDENT VALIDATION** for
+`H1 = controlled5 + shared-domain t0 rescue when the H1 winner's own
+t0 bound is active`. §6.1-6.9 record the initial audit and the
+resulting `PENDING` state (one material t0 truncation found,
+`catalog_row=565924`, §6.5-6.6); §6.10 records the shared-domain
+rescue design, its Step 1-3 closure, and the final decision. §6.1-6.9
+are kept exactly as originally written -- the `PENDING` conclusion
+they reached was correct at the time and is not retroactively
+edited; §6.10 supersedes only the open decision in §6.7, not the
+facts in §6.5-6.6.
+
+### 6.1 Question
+
+Can `controlled5` (the 5-start H1 plan: `truth`,
+`H0_NESTED_piE_0`, `truth_half_piE`, `truth_mirror_u0_piEN`,
+`old_final_reseed`) be frozen as the H1 strategy for Gate 3, or does
+a winner-bound / t0 / piE / nestedness audit reveal a structural
+problem that must be fixed first?
+
+### 6.2 Inputs
+
+- `~/Downloads/hidden_parallax/production_validation/gate2_controlled4_extreme100/...all_refits.csv`
+  (4 starts: `truth`, `H0_NESTED_piE_0`, `truth_half_piE`,
+  `truth_mirror_u0_piEN`) and
+  `gate2_oldfinal_extreme100/...all_refits.csv` (1 start:
+  `old_final_reseed`) — local, not repository-tracked, same class of
+  dependency as the Gate-1 raw fit directories.
+- `~/Downloads/hidden_parallax/hidden_parallax_refit_test/artifacts/extreme100/<catalog_row>/models/*/*/Event_*.h5`
+  — read-only, only for the pooled time arrays needed to reconstruct
+  each event's data-driven t0 domain (same artifact tree Experiment
+  B1c already used).
+- `validation/bounds_convergence/data/gate2_h0_anchor_manifest_extreme100.csv`
+  — the exact embedded-H0 reference per event (`chi2_h0`,
+  `t0_margin_factor`, `rescue_triggered`). Verified in this session:
+  for `catalog_row=36103`, `chi2_h0=178.6896431771567` matches
+  Experiment A1's `chi2_policy_final` for that event exactly — i.e.
+  this manifest already encodes the validated t0-rescue-adjusted H0
+  reference, not a plain unrescued value.
+- `results/b2_policy_comparison.csv` (Experiment B2; read only for
+  the frozen H0 policy's `mean_n_fits`, for the cost section).
+- New script: `validation/bounds_convergence/analyze_h1_final_audit.py`.
+- **One authorized, minimal, targeted diagnostic run** (not a new
+  start search): after confirming no existing local output covers
+  `catalog_row=565924` at a widened t0 domain (searched
+  `~/Downloads/hidden_parallax/production_validation/` and
+  `hidden_parallax_refit_test/` broadly; only H0-only runs and an
+  unrelated 3-event `controlled5_problem3` directory exist there, none
+  matching), ran the existing, unmodified
+  `validation/bounds_audit/run_bounds_audit_refit.py` /
+  `run_bounds_audit_refit_core.py` for exactly this one event, H1
+  only (`--fit-scope h1`, so 0 H0 fits executed), `controlled5` starts
+  (`HIDDEN_PARALLAX_H1_START_PLAN=controlled5`), same
+  `production_candidate` bounds, `HIDDEN_PARALLAX_T0_MARGIN_FACTOR=0.25`.
+  The core script's own built-in consistency guard requires the H0
+  anchor manifest's recorded `t0_margin_factor` to match the H1
+  env var exactly (enforcing shared H0/H1 nuisance domain for a valid
+  LRT); satisfied here with a scratch copy of
+  `gate2_h0_anchor_manifest_extreme100.csv` with only that one row's
+  `t0_margin_factor` set to `0.25` (not committed; the repo-tracked
+  manifest is unchanged). Output written to a new, separate, local
+  (not repository-tracked) directory,
+  `gate2_t0margin025_565924_diag/`, isolated from all other runs.
+  Exactly 5 H1 fits were executed, nothing else. The raw
+  `all_refits.csv` from that one run is copied into
+  `results/h1_t0margin025_565924_diagnostic.csv` (repository-tracked)
+  so this result does not depend on the local scratch directory
+  persisting. Exact reproduction command:
+  ```
+  HIDDEN_PARALLAX_H1_START_PLAN=controlled5 \
+  HIDDEN_PARALLAX_H0_ANCHOR_MANIFEST=<scratch copy of gate2_h0_anchor_manifest_extreme100.csv with catalog_row=565924's t0_margin_factor set to 0.25> \
+  HIDDEN_PARALLAX_T0_MARGIN_FACTOR=0.25 \
+  python3 validation/bounds_audit/run_bounds_audit_refit.py \
+    --catalog-row 565924 \
+    --manifest validation/bounds_convergence/data/extreme100_refit_manifest.csv \
+    --bounds-profile production_candidate \
+    --fit-scope h1 \
+    --work-root ~/Downloads/hidden_parallax/production_validation/gate2_t0margin025_565924_diag \
+    --force
+  ```
+
+### 6.3 Method
+
+Aggregated the two local H1 run roots into one canonical,
+integrity-checked table (`gate2_controlled5_diagnostics.csv`, 100
+events x 5 starts = 500 rows), hard-audited the same way as
+Experiment 0 (row/event counts, exactly the 5 expected start labels
+per event, `hypothesis=="H1"` throughout, `status=="success"`
+throughout, all params finite, no duplicate `(catalog_row,label)`
+rows — every check passed, 0 violations). Determined the
+`controlled5` winner per event (`argmin chi2` over the 5 starts) —
+this raw winner chi2 is `chi2_h1_raw_optimized`, never floored before
+being reported.
+
+*Winner-bound audit:* for each winner, read its 6-element
+`optimizer_active_mask` (order `t0,u0,tE,rho,piEN,piEE`) and computed
+distance-to-bound for the four fixed shared bounds
+(`u0,tE,rho,piEN,piEE`) plus the event-specific, data-driven t0
+domain (reconstructed from the H5, `t0_margin_factor` from the anchor
+manifest — same construction as the core fitter's own `DATA-DRIVEN
+t0 BOUND` block, read-only here). **`tE` and `rho` distances are
+computed in log10 space**, not linear — their bounds span 6-7 orders
+of magnitude, so a linear fraction-of-range is not physically
+meaningful (an early linear-scale run of this audit spuriously
+flagged 98/100 events as "near" the `tE` bound purely because the
+range is huge in linear units, despite 0 of them showing an active
+`tE` mask; switching to log-scale reproduced the mask-based result
+exactly, 0/100, and was kept as the corrected method — this
+correction is recorded here rather than silently applied).
+
+*Nestedness audit:* compared each event's `chi2_h1_raw_optimized`
+against that event's `chi2_h0` (the anchor manifest's exact embedded
+value, itself already t0-rescue-adjusted), **before** any
+`min(...)` floor, reporting the raw difference.
+
+*Cost:* `controlled5` is fixed at 5 H1 fits/event; combined with
+Experiment B2's frozen H0 policy mean.
+
+### 6.4 Information allowed
+
+This is a pure audit of already-run, already-committed fits; it reads
+no new features and proposes no new H1 starts. `chi2_h0` is used only
+as (a) the historical input to `H0_NESTED_piE_0` (already baked into
+the fits being audited) and (b) the nestedness comparison target —
+never as a criterion for selecting among the 5 `controlled5` starts.
+
+### 6.5 Results
+
+**Winner-bound audit** (`results/h1_final_audit_winner_bounds.csv`,
+100 rows):
+
+| param | n_active_mask | n_near_bound (log-scale for tE/rho, linear else, ≤1% of range) |
+|---|---:|---:|
+| t0 | 1/100 | 3/100 |
+| u0 | 0/100 | 0/100 |
+| tE | 0/100 | 0/100 |
+| rho | 10/100 | 10/100 |
+| piEN | 0/100 | 0/100 |
+| piEE | 0/100 | 0/100 |
+
+`u0`, `tE`, `piEN`, `piEE`: **no winner anywhere near any bound.**
+Max `|piEN|`/`|piEE|` among winners: `10.74`/`7.86` (bound `±40`);
+even pooling **all 500** individual H1 fits (every start, every
+event, not just winners), the most extreme values found are
+`|piEN|=20.81`, `|piEE|=21.20` — still barely half the `±40` bound.
+**No evidence of piE bound truncation anywhere in the H1 fit
+population, winners or not.**
+
+`rho`: 10/100 winners sit at the **lower** floor (`rho≈1e-7`,
+`active_mask` confirms exactly these 10, log-scale distance agrees);
+**none** approach the upper bound (`rho=10`; max winner `rho=4.14`).
+Full list (all 10, `results/h1_final_audit_winner_bounds.csv` joined
+with `extreme100_refit_manifest.csv`'s `true_rho`):
+
+| catalog_row | fitted rho | side | true_rho | winner start | chi2 |
+|---:|---:|---|---:|---|---:|
+| 64956 | 1.026e-7 | lower | 0.000264 | old_final_reseed | 132.15 |
+| 79853 | 1.001e-7 | lower | 0.061391 | old_final_reseed | 111.28 |
+| 85380 | 1.005e-7 | lower | 0.000053 | old_final_reseed | 91.99 |
+| 86451 | 1.000e-7 | lower | 0.000059 | old_final_reseed | 301.23 |
+| 87786 | 1.000e-7 | lower | 0.000211 | old_final_reseed | 266.74 |
+| 557860 | 1.000e-7 | lower | 0.000008 | truth_mirror_u0_piEN | 288.75 |
+| 562093 | 1.000e-7 | lower | 0.000166 | old_final_reseed | 232.52 |
+| 565924 | 1.000e-7 | lower | 0.000101 | truth_mirror_u0_piEN | 111.21 |
+| 572190 | 1.000e-7 | lower | 0.000524 | old_final_reseed | 520.43 |
+| 578896 | 1.001e-7 | lower | 0.000078 | old_final_reseed | 521.31 |
+
+**All 10/10 are lower-bound, 0/10 upper-bound — confirmed explicitly,
+not assumed.** Every one of these events also has a tiny `true_rho`
+(`8e-6` to `0.061`, all well below `1`) — i.e. the winner is
+correctly recovering that the *true* finite-source signal is itself
+close to the point-source limit for exactly these events; the data
+cannot resolve `rho` below the floor, which is the expected numerical
+signature of a real `rho→0` degeneracy, not a sign that a better,
+larger-`rho` minimum exists beyond the bound. No rho ladder or new
+fits are warranted by this. This is the well-known point-source
+degeneracy (`rho→0` is consistent with "not distinguishable from a
+point source" given the data, a genuine physical result at this
+bound's floor, which is
+itself a physically motivated limit, not an arbitrary cutoff) — not
+evidence of upper-bound truncation.
+
+`t0`: **1/100** winners exactly active (`catalog_row=565924`, at the
+domain's upper edge, distance `4.7e-10` days — effectively exact).
+Two more (`75965`, `80852`) are within 1% of the domain span without
+being flagged active by the optimizer (`0.83%` and `0.45%` from the
+nearest edge respectively) — close but not pinned.
+
+**`catalog_row=565924`, targeted t0-widening diagnostic (5 H1 fits,
+`t0_margin=0.25`, this event only — see §6.2/§6.3 for exactly how):**
+
+| | base (`t0_margin=0`, current `controlled5`) | widened (`t0_margin=0.25`, diagnostic) |
+|---|---|---|
+| winner start | `truth_mirror_u0_piEN` | `truth_mirror_u0_piEN` |
+| chi2 | `111.209716` | `109.846734` |
+| t0 | at domain upper edge (active) | `2464680.07` (interior; new domain `[2460531.95, 2465709.36]`) |
+| tE | `137.1` d | `861.1` d |
+| u0 | `0.974` | `0.516` |
+| rho | `1.0e-7` (floor) | `1.0e-7` (floor) |
+| active_mask | `t0` active | `rho` only (lower) |
+
+**`delta_chi2 = chi2_current - chi2_wider_t0 = 111.209716 - 109.846734
+= 1.362982`** — **material**, not negligible (more than 10x the
+`delta_opt<=0.1` development-set acceptance criterion Experiment
+A1/B1/B2 used for the H0 policy; that criterion does not itself apply
+to H1, but its scale is the only calibrated reference point available
+for judging "material" here). The wider-domain winner is not a
+small perturbation of the current one: `tE` moves from `137` to
+`861` days, and `t0` becomes fully interior (no longer active) — this
+is a genuinely different, better-fitting solution that the current
+`t0_margin=0` domain cannot reach for this one event. Per instruction,
+this result is reported here and NOT converted into a rescue policy;
+see §6.7 for the decision this leaves open.
+
+**Nestedness audit** (`results/h1_final_audit_nestedness.csv`, 100
+rows): **`N(chi2_H1_raw > chi2_H0_exact) = 0/100`.** Every single
+event's raw, unfloored `chi2_h1_raw_optimized` is already `<=
+chi2_h0`. The closest raw nestedness margin is `-0.0163`: still on
+the correct side of zero, with no raw nestedness violations. The
+median margin is `-47.8`, and the minimum (most negative, i.e.
+furthest from zero) is `-99625`. (This margin is a separate quantity
+from the `delta_opt=0.1` tolerance used to validate the H0
+optimizer elsewhere in this project; no comparison to that tolerance
+is implied or needed for nestedness.)
+
+**Cost:** `controlled5` = 5 H1 fits/event (fixed). Combined with
+Experiment B2's frozen H0 policy (`mean_n_fits=15.18`): **expected
+combined H0+H1 cost ≈ 20.18 fits/event** in development.
+
+### 6.6 Interpretation
+
+- No shared-bound truncation evidence anywhere: `u0`, `tE`, `piEN`,
+  `piEE` winners are comfortably interior for all 100 events, and
+  `piE` stays far from `±40` even across all 500 individual fits, not
+  just winners.
+- The 10/100 `rho` lower-bound hits are the expected point-source
+  degeneracy, not a bounds problem — confirmed explicitly (§6.5): all
+  10 are lower-bound, 0 upper-bound, and all 10 have a tiny
+  `true_rho`, consistent with a genuine `rho→0` degeneracy rather than
+  a truncated, larger-`rho` minimum. No event approaches the upper
+  bound, so widening `rho`'s range would not be justified by this
+  data, and narrowing the lower floor is a separate physical/numerical
+  question outside this audit's scope. No rho ladder was run, per
+  instruction, since this is exactly the case where one is not
+  warranted.
+- **The single `t0`-active event (`565924`) is NOT merely an isolated
+  cosmetic boundary touch — it is a confirmed, material truncation.**
+  The targeted diagnostic (§6.5) shows the current `controlled5`
+  (`t0_margin=0`) result for this event is `1.36` chi2 worse than a
+  reachable, materially different solution (`tE` `137d → 861d`) that
+  only becomes visible once the t0 domain is widened. This is the H1
+  analogue of H0's `36103` case, but unlike H0 (which has a validated,
+  already-frozen t0-rescue mechanism, Experiment A1 §0.4), **H1
+  currently has no equivalent rescue** — `controlled5` as specified
+  does not know to widen t0 for this event. Per instruction, no rescue
+  policy is proposed here; this is reported as an open finding.
+- Nestedness holds with a comfortable margin for all 100 events — no
+  numerical borderline case, let alone a real optimizer failure (this
+  holds using the *current*, `t0_margin=0`, `chi2_h1_raw_optimized`
+  for `565924`; the wider-domain diagnostic value, `109.85`, is even
+  further from `chi2_h0=454.55`, so nestedness is not put at risk by
+  the t0 finding either way). The raw-vs-floored bookkeeping principle
+  (§0.1, §15 of the checkpoint) is upheld: this audit reports
+  `chi2_h1_raw_optimized` directly, with no floor applied before
+  checking it.
+- `controlled5` continues to reproduce the best known H1 result on
+  `extreme100` for 99/100 events (checkpoint §13-14; this audit did
+  not re-run the ablation, only the winner/bound/nestedness properties
+  of the already-established winners) — the t0 finding affects exactly
+  one event out of 100 in this sample.
+
+### 6.7 Decision
+
+**PENDING — not yet frozen.** Three of the four checks (winner-bound
+for `u0/tE/piEN/piEE`, piE, nestedness) found no structural problem.
+The t0 check found one **material**, not negligible, truncation
+(`catalog_row=565924`, `delta_chi2=1.36`, §6.5-6.6). Per the
+conditions set for this audit, that rules out an unconditional
+"no problem found, freeze as-is" close. This leaves an explicit choice
+that this document does not make unilaterally:
+
+- **(a) Freeze `controlled5` exactly as specified**, documenting the
+  `565924` truncation as a known, quantified, single-event
+  (1/100 in `extreme100`) gap, and let Gate 3 reveal whether it recurs
+  at a similar rate in an independent sample before deciding whether
+  H1 needs a rescue mechanism at all; or
+- **(b) Design and validate an H1 t0-rescue mechanism** (structurally
+  analogous to H0's already-frozen one, Experiment A1 §0.4) before
+  freezing `H1`, so that Gate 3 evaluates a policy that already
+  handles this case.
+
+Both preserve everything else already audited clean in §6.5-6.6
+unchanged; neither has been chosen here.
+
+### 6.8 Consequence
+
+- No `H1` freeze decision is recorded until §6.7 is resolved by
+  explicit instruction.
+- The 10/100 `rho`-floor population is confirmed benign (§6.5-6.6)
+  and needs no further action regardless of how §6.7 is resolved.
+- Combined expected per-event cost entering Gate 3 (unaffected by the
+  §6.7 choice, since it only concerns one event's H1 result, not the
+  fit count): `H0(B2, mean 15.18) + H1(controlled5, fixed 5) ≈ 20.18`
+  H0/H1 fits per event — this is the number to carry into Gate 3B's
+  eventual wall-time-based production budget estimate (§5), once real
+  per-fit timing exists.
+- No production, core-fitter, or SLURM change is made by this audit.
+  The one diagnostic run (§6.2-6.3) used the existing, unmodified
+  fitter for exactly 5 fits on one event and is not itself a change to
+  any frozen policy.
+
+### 6.9 Next step
+
+Resolve §6.7 (a) vs (b) by explicit instruction. If (a): `H1 =
+controlled5` is frozen as **CANDIDATE — FROZEN FOR INDEPENDENT
+VALIDATION** (matching Experiment B2's status for H0) with the
+`565924` finding documented as a known gap, and the project proceeds
+directly to Gate 3. If (b): design the minimal H1 t0-rescue mechanism
+first (a new, small, explicitly scoped task, not opened here), then
+re-run this same audit's t0 check before freezing. Either way, H0
+(Experiment B2) is unaffected and remains frozen as already decided.
+
+---
+
+### 6.10 Shared-domain t0 rescue — design and closure (resolves §6.7 option (b))
+
+**Resolution of §6.7:** option **(b)** was chosen. This section
+designs the minimal shared-domain t0 rescue, closes it with Steps 1-3
+below, and records the final freeze decision.
+
+**Design principle (as specified):** never run H1 alone at a t0
+domain different from H0's — the core fitter's own consistency guard
+already enforces this (Experiment A1 §0.4; triggered directly by this
+session's diagnostic run, §6.2, before the correct anchor-manifest
+override was used). The rescue is:
+
+1. run the base domain per the frozen policies (H0: Experiment B2;
+   H1: `controlled5`);
+2. **if the H1 `controlled5` winner's own `t0` component of
+   `optimizer_active_mask` is active**, promote that event to
+   `t0_margin=0.25`, and re-evaluate **both** H0 (`gate1_final18`) and
+   H1 (`controlled5`) in that shared, widened domain;
+3. use the widened-domain results for that event's LRT.
+
+This complements, and does not replace, the existing validated
+H0-only t0 rescue (Experiment A1 §0.4, triggered by the H0 winner's
+own `t0` active flag, independently). The new trigger reads only
+`winner_H1_t0_active` (from `h1_final_audit_winner_bounds.csv`'s
+`t0_active` column) — no `catalog_row` appears in the trigger logic
+anywhere in `analyze_h1_final_audit.py`.
+
+**Step 1 — `565924` case study** (`results/h1_t0_rescue_565924_case_study.csv`,
+built entirely from already-existing tables: H0 base/wide from
+`gate1_oracle_diagnostics.csv`'s `gate1_final18_base_t0margin0` /
+`gate1_final18_rescue_t0margin0.25` sources — no new H0 fits were
+needed, that global t0=0.25 diagnostic already covers all 100 events
+— and H1 wide from this session's one 5-fit diagnostic, §6.5):
+
+| quantity | value |
+|---|---:|
+| `chi2_H0_base` | 454.550938 |
+| `chi2_H1_base` | 111.209716 |
+| `DeltaChi2_LRT_base` | 343.341221 |
+| `chi2_H0_wide` | 454.500884 |
+| `chi2_H1_wide` | 109.846734 |
+| `DeltaChi2_LRT_wide` | 344.654150 |
+| change in H0 | `-0.050054` (negligible — H0 was never t0-bound for this event) |
+| change in H1 | `-1.362982` (material, §6.5) |
+| **change in LRT** | **`+1.312928`** |
+| nestedness raw, widened (`chi2_H1_wide - chi2_H0_wide`) | `-344.654150` (no violation, comfortable margin) |
+| H1 wide winner active_mask | `[0,0,0,-1,0,0]` (t0 resolved; `rho` still at its lower floor, consistent with this event's tiny `true_rho`, §6.5) |
+| H1 base winner active_mask | `[1,0,0,-1,0,0]` (t0 **and** rho both active at base — the rescue resolves t0 only, as expected; the rho floor is the already-understood, benign point-source degeneracy, §6.5-6.6) |
+
+Widening the shared domain for this event changes the **LRT by
++1.31**, driven almost entirely by H1's improvement (H0 barely
+moves). This is a real, if modest, change to a real quantity used for
+parallax detection — exactly the kind of case this rescue exists to
+catch.
+
+**Step 2 — trigger verification on extreme100**
+(`results/h1_t0_rescue_extreme100_trigger_check.csv`, computed from
+`h1_final_audit_winner_bounds.csv`'s `t0_active` column and
+`gate2_h0_anchor_manifest_extreme100.csv`'s `rescue_triggered` column
+only — no new fits, no hardcoded rows):
+
+- `n_h1_winner_t0_active = 1/100` → row `565924` (this is *found*,
+  not assumed — the same number already reported in §6.5).
+- `n_h0_rescue_triggered` (existing, validated H0-only rescue) `=
+  1/100` → row `36103`.
+- `n_triggering_both = 0` — **the two rescues are disjoint in
+  extreme100**: no event requires both simultaneously. (Nothing
+  prevents an event from doing so in principle — the two triggers are
+  independent conditions — this is simply what is observed here.)
+
+**Step 3 — cost** (`analyze_h1_final_audit.py`, cost section, no new
+thresholds or optimization):
+
+- Conservative, non-optimized cost when the new rescue fires: complete
+  `gate1_final18` (18 H0 fits, widened; no credit taken for any
+  base-domain fits that might be reusable at the wider bound) + rerun
+  `controlled5` (5 H1 fits, widened) = **23 extra fits**, upper-bound,
+  not tuned.
+- Triggers on `1/100 = 1.0%` of extreme100 events →
+  **expected overhead = 0.01 x 23 = 0.230 fits/event.**
+- Combined expected cost entering Gate 3:
+  `H0(B2, 15.18) + H1(controlled5, 5) + shared-domain-rescue overhead
+  (0.23) ≈ 20.41 fits/event` (vs. `20.18` without the new rescue) —
+  small, as expected for a ~1%-triggered rescue.
+
+**Combined H0+H1 t0-domain precedence — exact control flow for Gate 3.**
+extreme100 happens to show the H0-only rescue (`36103`) and the new
+H1-triggered rescue (`565924`) as disjoint (§6.10 Step 2), but Gate 3
+could produce an event where they interact. The combined policy is
+defined unambiguously as follows, so Gate 3 can implement it exactly,
+with no ambiguity about precedence or which domain the final LRT
+uses:
+
+1. Run H0 per the frozen Experiment B2 policy (base `k=6`; escalate to
+   complete `gate1_final18` only if B2's own `abs_log_ratio_tE`
+   trigger fires). The validated H0-only t0 rescue (Experiment A1
+   §0.4) can only be evaluated once `gate1_final18`'s full winner
+   exists — i.e. only for events where B2 already escalated to
+   completion; this is pre-existing B2/A1 behavior, unchanged here.
+2. `shared_t0_margin := 0.0`. If the validated H0-only t0 rescue
+   triggers (the `gate1_final18` winner's own `t0` component of
+   `optimizer_active_mask` is active), set
+   `shared_t0_margin := 0.25`.
+3. Run H1 `controlled5` using `shared_t0_margin` as set by step 2 —
+   i.e. if H0's own rescue already widened the domain, H1's *first*
+   run already uses the widened domain, not the base one.
+4. **Only if `shared_t0_margin` is still `0.0`** after step 3, and the
+   H1 `controlled5` winner's own `t0` component of
+   `optimizer_active_mask` is active: set
+   `shared_t0_margin := 0.25`; re-run H0 robust (`gate1_final18`, full
+   18 strategies) at `t0_margin=0.25`; re-run H1 `controlled5` at
+   `t0_margin=0.25`; use these two widened results for the event's
+   final LRT. (This is exactly the `565924` case, §6.10 Steps 1-3.)
+5. **If, after `shared_t0_margin` is already `0.25`** (from step 2 or
+   step 4), the H1 winner's `t0` is *still* active: **do not widen
+   again and do not invent a new rule now.** Record this as a policy
+   anomaly/failure for Gate 3 to report explicitly (event id, both
+   chi2 values, both active masks) — it is evidence the frozen policy
+   is insufficient for that event, to be evaluated after Gate 3, not
+   patched during it.
+
+**Invariant, enforced by construction in every branch above: the H0
+and H1 chi2 values that enter the final LRT for an event must always
+come from the identical `shared_t0_margin` for that event** — never
+H0 at one t0 domain and H1 at another. Every condition above reads
+only `optimizer_active_mask` (H0's or H1's own winner); **`catalog_row`
+never appears in any runtime condition** of this combined policy, in
+this document or in `analyze_h1_final_audit.py`. No result already
+computed for `extreme100` (§6.1-6.10 above) changes under this
+precedence definition — it is a restatement of exactly what Steps
+1-3 already did for `565924`, made explicit and general so Gate 3 does
+not have to re-derive it from one worked example.
+
+**Freeze decision:** all four conditions set for this closure hold:
+the widened shared-domain result for `565924` is internally
+consistent (H0 barely moves, H1 improves materially, LRT changes by a
+sensible, bounded amount); nestedness remains correct (widened margin
+`-344.65`, no violation); the trigger is exactly
+`winner_H1_t0_active`, verified on all 100 events with no
+`catalog_row` hardcoded anywhere in the logic; no other anomaly
+appeared (rho/piE were already closed clean in §6.5-6.6, unaffected
+by this rescue).
+
+**`H1 = controlled5 + shared-domain t0 rescue when the H1 winner's t0
+bound is active` is frozen as `CANDIDATE — FROZEN FOR INDEPENDENT
+VALIDATION`.** Gate 3 must evaluate exactly this rule (base
+`controlled5`, check `winner_H1_t0_active`, and when true, widen both
+H0 and H1 to `t0_margin=0.25` and use those widened results for the
+LRT) without retuning the trigger, the `0.25` margin, or any bound —
+the same no-retuning discipline already established for Experiment
+B2's H0 policy (§10 there) applies here identically. If Gate 3 finds
+this rule fails for some event (e.g. `t0_margin=0.25` is not wide
+enough, or the rescue fires but does not resolve the truncation), the
+same principle from Experiment B2 §10 applies: either fall back to
+not rescuing (documenting the gap) or treat Gate 3 as consumed
+development data and require a further independent sample — never
+retune silently on Gate 3.
+
+**No production, core-fitter, or SLURM change was made.** The design
+above describes a rule; implementing it as an automatic step in
+`run_bounds_audit_refit_core.py` (mirroring how the existing H0-only
+t0 rescue is implemented there) is production-adjacent work explicitly
+deferred, not done in this session — Gate 3 can be run by manually
+applying this rule's two-branch logic (base run; widen only if
+triggered) using the existing, unmodified fitter, exactly as Step 1's
+case study did for `565924`.
+
+**Next step:** H0 (Experiment B2, frozen) + H1 (`controlled5` +
+shared-domain t0 rescue, frozen) → **Gate 3 independent validation**
+(200-500 events, evaluating both frozen policies and this rescue rule
+exactly as specified, without retuning) → Gate 3B cluster profiling →
+empirical H0/null LRT calibration → staged production.
