@@ -3293,3 +3293,100 @@ This section documents the corrected cost, it does not solve it. No
 H1 self-seeding, scouting, Fisher, or morphology variant was tried or
 re-tried for H1 in this session. That is explicitly the next
 open problem for a future session, not started here.
+
+---
+
+## 10. H0 freeze and H1 legacy-seed replacement attempt (co-adaptive candidates)
+
+**H0 freeze:** the 16-cost architecture from §8 is tagged
+`h0-morphology-freeze-2026-09-15` on commit `7dadcbd`, message
+"H0 candidate frozen for independent validation... cost=16... H0
+strategy-family search closed on extreme100 as of this tag." No
+further H0 strategy search is planned on `extreme100`.
+
+**H1 objective:** replace `old_final_reseed` (deployable-from-scratch
+cost 10-11 legacy TRF, §9) with a start built from information already
+available at H1-fit time — no legacy producer, no fixed-backbone grid
+(that remains **CLOSED FAIL**, §7.2 — this is a *different* mechanism
+because here **all six H1 parameters co-adapt** during a full TRF,
+nothing is held fixed). **Truth `piEN`/`piEE` is legitimate pre-fit
+information in this Monte Carlo simulation only** — this strategy is
+explicitly not a template for real-data fitting, where truth is
+unknown; it is being used here purely to test whether the *basin* that
+`old_final` finds is reachable at all once parallax is
+seeded roughly correctly, as a necessary first check before
+addressing the harder “piE also unknown” problem.
+
+### H1-A — `H0_FINAL_TRUE_PIE`
+
+Initial vector: `(t0,u0,tE,rho)` = the final robust H0 solution
+already available under the current architecture (the same reference
+`H0_NESTED_piE_0` already uses, `gate2_h0_anchor_manifest_extreme100.csv`
+— no new H0 fit), `(piEN,piEE)` = truth. All 6 H1 parameters free,
+`production_candidate` bounds, current `bounded_flux_profile`, same
+optimizer options as every other H1 fit in this log, physical mode
+(matching `controlled4`/`controlled5`'s own precedent). **5 new H1
+TRF fits**, exactly the 5 `old_final`-essential events:
+
+| row | chi2 new | chi2 controlled5 | delta | pass |
+|---|---|---|---|---|
+| 85380 | 92.086 | 91.989 | **0.096** | **PASS** |
+| 87786 | 269.519 | 266.735 | 2.784 | fail |
+| 79700 | 134.622 | 132.941 | 1.681 | fail |
+| 50179 | 124.555 | 124.143 | 0.412 | fail |
+| 86451 | 359.923 | 301.232 | 58.691 | fail |
+
+**1/5 → PARTIAL.** No retuning of this start. Per the preregistered
+rule, moved directly to H1-C.
+
+### H1-C — `MORPH_TRUE_PIE`
+
+Same construction, `(t0,u0,tE,rho)` = the frozen rank-1 H0 morphology
+candidate (unchanged, no re-smoothing/re-lookup), `sign(u0)` set to
+`sign(truth u0)` (documented, deliberate — H0's exact `u0` degeneracy
+does not survive under H1, since `piE` breaks the `u0→-u0` symmetry;
+for all 4 events tested `truth u0>0`, so no sign flip was actually
+needed here, but the rule is general), `(piEN,piEE)` = truth. Run only
+on the 4 events H1-A did not rescue. **4 new H1 TRF fits:**
+
+| row | chi2 new | chi2 controlled5 | delta | pass |
+|---|---|---|---|---|
+| 87786 | 269.957 | 266.735 | 3.222 | fail |
+| 79700 | 134.430 | 132.941 | 1.489 | fail |
+| 50179 | 124.866 | 124.143 | 0.723 | fail |
+| 86451 | 407.741 | 301.232 | 106.509 | fail |
+
+**0/4 → both candidates together rescue only 1/5.** Per H1-E, this is
+a joint FAIL: neither co-adaptive re-seeding from the current H0
+final nor from morphology, even with truth `piE` handed to it for
+free, reaches `old_final`'s basin on 4 of the 5 events.
+
+### H1-E — what `old_final` is actually finding (diagnostic dump, no new fits beyond the 9 above)
+
+| row | best `controlled4` | `old_final_reseed` | gap | note |
+|---|---|---|---|---|
+| 87786 | 269.344 (`H0_NESTED_piE_0`) | **266.735** | 2.6 | `old_final`'s own raw legacy vector already sits near `rho≈0`, `piE≈(-0.63,-1.95)` — a basin none of truth/H0-final/morphology-seeded fits reach; truth's own `piE≈(-3.9,-6.3)` is far larger in magnitude and different in balance |
+| 79700 | 133.919 (`truth_half_piE`) | **132.941** | 1.0 | small but consistent gap; `MORPH_TRUE_PIE` gets closest of the new candidates (Δ=1.49) but not within 0.1 |
+| 50179 | 124.563 (`H0_NESTED_piE_0`) | **124.143** | 0.4 | tightest gap of the 4; still not closed by either new candidate |
+| 86451 | 301.493 (`truth`/`truth_half_piE`, tied) | 301.232 | 0.26 | **H0-final-seeded candidates do worse here than plain truth** (359.9, 407.7) — this event's current H0 final is itself a poor basin (`chi2_h0≈5209`, established earlier), so seeding H1 from it actively hurts; truth alone is already nearly as good as `old_final_reseed` |
+
+**Pattern:** `old_final`'s advantage is small in absolute chi2 terms
+for 3 of the 4 (Δ 0.26-1.0) but not reached by any tested
+co-adaptive alternative; only 87786 shows a materially different,
+apparently genuinely distinct low-rho/moderate-piE basin. This is
+consistent with a **basin-reconstruction problem, not a starting-point
+problem** — per the user's own framing, not pursued further as blind
+start-guessing in this session.
+
+### Totals and decision
+
+- **New H1 TRF fits run this section: 9** (5 for H1-A + 4 for H1-C).
+- `old_final` legacy dependency **cannot** yet be removed — neither
+  candidate reaches a clean pass, and per the explicit stop rule no
+  further algebraic-transform starts were invented on these same 5
+  events.
+- **Left open, explicitly, for a future session:** basin
+  reconstruction for `old_final` — understanding *what* information
+  (beyond truth `piE` and the current H0 final) actually determines
+  that this specific low-rho / moderate-piE region is favored, rather
+  than continuing to guess additional fixed starts.
