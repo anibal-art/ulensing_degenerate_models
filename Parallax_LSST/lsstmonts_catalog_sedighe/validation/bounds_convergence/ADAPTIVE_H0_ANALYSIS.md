@@ -2897,9 +2897,155 @@ conditions that would have justified keeping this direction.**
   (+ conditional widened re-run).
 - No cheaper alternative to either was found in this session.
 
-**Next step:** morphology-informed H0 starts (new experiment, not yet
-started as of this checkpoint) — see the dedicated section once that
-experiment closes. If it also fails, the H0 optimization search is
-considered exhausted for this pre-Gate-3 cycle and Gate 3 preflight
-resumes on top of the frozen `gate1_final18`/B2/`controlled5` policies
-and the accepted 19-TRF worst-case H0 cost.
+**Next step:** morphology-informed H0 starts — see §8.
+
+---
+
+## 8. Morphology-informed H0 starts
+
+**Status:** offline diagnostic (M0-M6) **PASSED**; minimal TRF test
+(M7) gives a **partial, non-trivial rescue (5/12 critical events)**,
+not a clean pass — decision on whether to extend to `extreme100` is
+left open below, not made unilaterally in this session.
+
+**Question:** can the *observed* light-curve shape (not truth, not
+Fisher, not a short scout) be used to construct an H0 start
+`(t0,u0,tE,rho)` that lands closer to the H0 oracle basin than the
+truth-anchored starts already tried — specifically on the 12 events
+where `old_H0` is essential (§7)? Truth/oracle are used only to
+*evaluate* the result, never to build it.
+
+### M0 — frozen morphology extraction
+
+`morphology_extraction.py`. Per band: robust (inverse-variance-weighted
+median) baseline magnitude, dimensionless excess-flux proxy
+`excess(t) = 10^(-0.4(m(t)-m_base)) - 1`, error-propagated. A
+heteroscedastic weighted smoothing spline (`UnivariateSpline`,
+`w=1/err_excess`, `k=3`, `s=N_band` — scipy's own documented
+rule-of-thumb for `w=1/sigma` weights) per band; **no Gaussian
+Process anywhere**. Bands combined only *after* this per-band
+normalization, via a single per-band scalar SNR weight — never mixing
+raw fluxes across filters. Peak and `T25/T50/T75` are the width of
+the largest contiguous region above a threshold fraction of peak
+excess; a side that never drops below threshold within the
+data-supported range is recorded `censored`/`not measurable`, never
+extrapolated. Full definition frozen and documented in the module
+docstring before any oracle comparison. Run on all 100 events
+(`run_morphology_extraction_all_events.py` →
+`results/morphology_M0_M1_M2_extreme100.csv`): **100/100 measurable**
+at the top level; T50 fully uncensored (both sides) for 92/100;
+`peak_SN` computable for 90/100 (the other 10 have zero data points
+falling inside the geometric T50 window despite a measurable spline
+peak — flagged as `NaN`, not fabricated; a real "poorly measured"
+case, not a bug).
+
+### M1/M2 — observables and quality
+
+`t_peak_morph`, `T25`, `T50`, `T75` (+ `T50_left`/`T50_right`,
+`A50 = (T50_right-T50_left)/(T50_right+T50_left)`, diagnostic only,
+never an FSPL parameter), `peak_SN`, `integrated_SN`, point counts,
+`n_contributing_bands` — all in the same CSV above. No trained
+classifier built from these; they are reported and correlated
+descriptively only (see M5).
+
+### M3/M4 — FSPL dimensionless lookup + inversion
+
+`build_fspl_dimensionless_lookup.py`: grid over `|u0|∈[1e-3,3]` ×
+`rho∈[1e-4,2]` (60×60, log-spaced, generic — not tuned against
+`extreme100`), pyLIMA's `magnification_FSPL_Yoo` (Yoo et al. 2004,
+no limb darkening, `gamma=0`), extracting `T25/T50` and `T75/T50` in
+units of `tE`. **Confirmed exactly, not assumed:** H0's FSPL
+magnification is bit-identical under `u0 -> -u0`
+(`max|A(u0)-A(-u0)|=0.0` over a test grid) — H0 is exactly degenerate
+in `u0` sign, so only `u0_morph > 0` (canonical) is ever produced, no
+mirrored duplicate starts. 2760/3600 grid points usable (others: peak
+never drops below threshold within the fixed `tau∈[-15,15]` range, or
+grid resolution insufficient).
+
+`invert_morphology_to_h0_start.py`: inverts observed `(T25/T50,
+T75/T50)` against the grid (nearest-match + up to 2 more genuinely
+distinct local minima, ≥0.3 dex apart in `(log u0, log rho)` and
+within 3× the best mismatch — M4's explicit anti-duplication rule).
+**100/100 events invertible**, 98/100 produced all 3 candidate slots
+(real degeneracy in the 2-ratio inversion is common and not hidden).
+`t0_morph = t_peak_morph`; `tE_morph` from the absolute `T50` scale
+divided by the grid point's dimensionless `T50/tE`.
+
+### M5 — offline diagnostic (zero new TRF)
+
+`analyze_morphology_vs_oracle.py` → `results/morphology_M5_offline_diagnostic.csv`.
+Dimensionless joint distance `D = sqrt(Δ(t0/tE)^2 + Δu0^2 + Δ(log tE)^2
++ Δ(log rho)^2)` from each event's rank-1 morphology candidate to
+truth, to the oracle52 winner, and to the raw `old_H0` vector.
+
+**Critical group (n=12):** median `D(morph,oracle) = 3.05` vs median
+`D(truth,oracle) = 5.97` — a clear reduction. **10/12 events move
+closer to the oracle basin than truth does** (the 2 that don't:
+563210, 567800). Median `D(morph,truth) = 5.83` — morphology is
+**not** a trivial truth-proxy (if it were, this would be ≈0). Rest
+group (n=88) shows the same direction (70/88 closer), so the effect
+is not an artifact of the critical group's own construction.
+Descriptive correlation of the improvement with quality diagnostics:
+weak negative with `peak_SN` (−0.40, i.e. no evidence that only
+high-SNR events benefit — if anything mildly the opposite), weak
+positive with band count (+0.13), negligible with `A50` (−0.03) — no
+strong, simple explanatory driver identified; not pursued further
+(explicitly out of scope: no classifier built on this).
+
+### M6 — preregistered decision (frozen before this run)
+
+Criteria (documented in `analyze_morphology_vs_oracle.py` before
+execution): (a) median distance on the 12 critical events improves by
+more than 30% (`morph < 0.7×truth`), (b) a clear majority (≥60%,
+i.e. ≥8/12) move closer, (c) not a trivial truth-proxy. **All three
+hold** (49% median reduction, 10/12, `D(morph,truth)` far from zero).
+**M6 = PASS.**
+
+### M7 — minimal TRF test (12 events only, full convergence)
+
+`run_h0_morphology_trf.py`, one process per coordinate mode (mode
+fixed at `core.py` import time, as throughout this log) ×
+`production_candidate` bounds × current `bounded_flux_profile` ×
+default (unbudgeted) `OPTIMIZER_OPTIONS` — **48 new real TRF fits**
+(12 events × 4 modes), the rank-1 morphology candidate as the only
+start tested, no reduced budget, no new parametrization.
+
+| row | chi2 (best of 4 modes) | oracle52 | delta | winner mode |
+|---|---|---|---|---|
+| 83189 | 163.178141 | 163.178116 | 0.00003 | log_rho |
+| 567800 | 347.952416 | 347.952406 | 0.00001 | log_rho |
+| 574423 | 257.312533 | 257.312224 | 0.00031 | physical |
+| 35927 | 200.890880 | 200.887454 | 0.00343 | log_te |
+| 79501 | 117.665383 | 117.623327 | 0.04206 | log_te |
+| 82728 | 410.223349 | 409.967004 | 0.256 | log_te_rho |
+| 567365 | 385.231833 | 383.598845 | 1.633 | physical |
+| 558189 | 1434.196973 | 1429.085570 | 5.111 | log_te |
+| 579320 | 28929.346972 | 28895.268509 | 34.08 | log_te_rho |
+| 563210 | 1741.288128 | 1190.740949 | 550.5 | log_te_rho |
+| 557860 | 946.547991 | 296.115322 | 650.4 | log_te_rho |
+| 62786 | 103384.846317 | 100020.801881 | 3364.0 | log_te_rho |
+
+**N(Δ>0.1)=7/12, N(>1)=6, N(>10)=4, worst=3364.0 (row 62786).
+5/12 rescued exactly (Δ≤0.1).** This is a genuine, non-trivial partial
+result — better than pure legacy-free (0/12, §7.3's truth-only proof)
+and comparable to H0 self-seeding (4/12, §7.2) — but **not a clean
+pass**: 3 of the 7 remaining failures are still catastrophic
+(550-3364 in chi2), not near-misses.
+
+### Decision (left explicit, not made unilaterally here)
+
+Per the preregistered M7/M8 rule ("only if this test really rescues
+an important fraction of the 12" → evaluate extending to
+`extreme100`; otherwise accept the 19-TRF worst-case and stop): 5/12
+is a real but partial signal, consistent with the pattern of every
+other direction in §7 (real improvement, never full closure). This
+session did **not** extend the test to the full 100 events or
+recompute the exact set-cover cost with morphology as an added
+candidate family — that decision is left to the next turn. **No
+retuning of the smoothing rule, width thresholds, lookup grid range,
+or SNR definitions was done to try to improve this result** — every
+parameter above was frozen before M5 was run.
+
+**Cost so far this section:** 0 TRF for M0-M6 (pure forward/offline
+work) + 48 TRF for M7 = **48 new TRF fits total**, all confined to the
+12 critical events, none on the other 88.
