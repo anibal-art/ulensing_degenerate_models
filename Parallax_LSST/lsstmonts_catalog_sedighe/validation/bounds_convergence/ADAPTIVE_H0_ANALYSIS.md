@@ -3527,3 +3527,32 @@ diagnostics + 2 continuations, for 87786 and 50179) + 6 (block-ablation)
 **Next step (deliberately not started here):** reframe as a *cheap
 family/template-based piE-basin-localization* problem, not another
 round of individually-designed hybrid starts.
+
+### CLOSED — H1 basin reconstruction experiments (H1-A through H1-H)
+
+**Status as of this checkpoint: CLOSED.** Summary of what was
+established and what was not:
+
+- `old_final`'s piE block is **necessary** for basin access on both
+  confirmed genuinely-locally-stationary distinct-basin events
+  (87786, 86451) — shown by leave-one-block-out perturbation around
+  `old_final`'s own raw vector (block-ablation): backbone/ρ
+  replacements never break it, piE replacement always does.
+- `old_final`'s piE is **not universally sufficient**: transplanted
+  onto `controlled4`'s own converged backbone/ρ (a non-local move),
+  it reproduces `old_final_reseed` almost exactly on 86451 (**PASS**)
+  but drifts away and re-converges near `controlled4`'s own basin on
+  87786 (**FAIL**, H1-H).
+- Therefore: **basin access depends on the joint nonlinear context**,
+  not on any single block in isolation, at least for 87786.
+- No hybrid-start search (pairwise swaps, rho+piE hand-built starts,
+  truth/morphology hybrids, backbone-fixed grids, or any further
+  manual parameter-swap experiment) will be run on `extreme100` past
+  this point. 26 new H1 TRF fits total across H1-A through H1-H (9 +
+  17), zero legacy-producer fits.
+- `old_final`'s legacy-producer cost (10 unconditional + 0-1
+  conditional TRF, §7.1/§9) **remains the accepted H1
+  deployable-from-scratch prerequisite** for this cycle — not
+  replaced, not further searched. Any future replacement attempt must
+  be framed as cheap piE-basin *localization*, not another
+  individually-designed start.
