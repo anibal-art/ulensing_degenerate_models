@@ -2611,3 +2611,295 @@ shared-domain t0 rescue, frozen) → **Gate 3 independent validation**
 (200-500 events, evaluating both frozen policies and this rescue rule
 exactly as specified, without retuning) → Gate 3B cluster profiling →
 empirical H0/null LRT calibration → staged production.
+
+---
+
+## 7. Optimization search closed before morphology experiment
+
+**Status:** all sub-experiments below are **CLOSED — FAIL** or
+**CLOSED — EXACT RESULT**, not to be repeated on `extreme100` without
+new evidence. This section is the checkpoint required before starting
+the morphology-informed-start experiment (§8).
+
+**Context.** After freezing H0 (B2, §Experiment B2 elsewhere in this
+log) and H1 (`controlled5` + t0 rescue, §6) for Gate 3, a Gate-3
+preflight investigation found that both frozen policies structurally
+depend on `old_H0` (a legacy TRF fit under old, invalid, narrow bounds)
+as a seed: 8 of `gate1_final18`'s 18 H0 strategies and 1 of
+`controlled5`'s 5 H1 strategies (`old_final_reseed`) are anchored on
+it. Since Gate 3 needs this to work on **new**, previously-unfitted
+events, a `legacy seed generation` stage (2 extra TRF fits/event) was
+initially identified as unavoidable overhead (§7.1 below). Everything
+in this section is the subsequent search for a way to **avoid or
+reduce** that overhead — reusing already-paid computation instead —
+before accepting it. All of it failed to reduce the cost; the exact
+worst-case H0 cost is now proven to be irreducible within the studied
+strategy pool (§7.3).
+
+**`extreme100` remains development-only** throughout this section — no
+Gate 3 event was touched. No production code, core fitter
+(`run_bounds_audit_refit_core.py`, `run_bounds_audit_refit.py`), bounds
+profile, `oracle52`, or frozen policy was modified. Gate 3 remains
+paused.
+
+**Reproducibility.** All scripts referenced below live in this
+directory (`validation/bounds_convergence/`) and read/write
+`results/*.csv`; run them with this directory as the working directory
+(matches the convention of every other `analyze_*.py` script in this
+log). They import the frozen fitter from `../bounds_audit/` read-only
+and never modify it. Where a script needs to fix the TRF coordinate
+mode (`physical`/`log_te`/`log_rho`/`log_te_rho`), it sets
+`HIDDEN_PARALLAX_TRF_COORDS` **before** importing
+`run_bounds_audit_refit_core`, because that module installs its
+coordinate-mode monkeypatch once, at import time — this is why some of
+the scripts below are split one-mode-per-process rather than looping
+over modes in one run.
+
+### 7.1 Legacy-seed cost audit (`old_H0` / `old_final` provenance)
+
+Traced `old_H0` (→ `TRF_FSPL_NoParallax.npy`) and `old_final`
+(→ `TRF_FSPL_Parallax.npy`) to their exact producer in
+`~/microlensing/simulation_Rubin/roman_rubin/functions_roman_rubin.py`
+(`sim_fit_multi_fits`) and `fit_lc.py`. Findings:
+
+- `old_H0` = 1 TRF fit, start = truth, old narrow bounds (t0=truth±30d,
+  u0=±1, tE∈[0.1,20000], rho∈[1e-7,10]).
+- `old_final` = FAST's H1 multistart: a 3×3 piE-fraction grid
+  (`[-0.5,0,0.5]²` around the embedded-H0 center, **each grid point a
+  real TRF fit**, not a forward evaluation) + one TRF polish of the
+  winner, old narrow piE bounds (half-width 1.9973/2.201096).
+- Only the raw parameter vectors are consumed downstream
+  (`old_h0[:4]`, `old_h1` full 6-vector) — `old_h0_chi2`/`old_h1_chi2`
+  are print-only diagnostics, never used in any control-flow decision.
+- Reusing old-bounds provenance is not scientifically required — the
+  vector is just an initial guess, fully re-optimized under
+  `production_candidate` bounds by the frozen fitter.
+
+**Conclusion: legacy-seed generation is real, bounded overhead (≈2 TRF
+optimizations/event: 1 for `old_H0`, ~1 TRF-equivalent for
+`old_final`'s grid+polish), not eliminable by re-deriving it under new
+bounds — the seed is a genuine converged point of a *different* search,
+not a deterministic function of truth/catalog data.**
+
+### 7.2 Self-seeding: reuse already-paid fits instead of a legacy stage — CLOSED, FAIL
+
+**Question:** can `old_H0`/`old_final` be replaced by re-seeding from a
+fit the frozen policy runs *anyway* (zero extra TRF), instead of a
+separate legacy-bounds fit?
+
+**H0 `selfseed_final18` — FAIL.** `current_H0_anchor` = min-chi2 of the
+4 truth-anchored `k=6` fits (`physical/truth/{0.1,1}`,
+`log_rho/truth/{0.1,1}`, `log_te/truth/1`; picked once/event, no extra
+fit). Re-ran the 8 `old_H0`-anchored `gate1_final18` slots from this
+anchor instead of `old_H0` — 96 real TRF fits (12 essential events ×
+8 strategies; script `run_h0_selfseed_batch.py` /
+`run_dynamic_h0_fit.py`, data `results/h0_selfseed_results.csv`).
+Result vs `gate1_final18`: **N(Δ>0.1)=8/12, N(>1)=4, N(>10)=3,
+worst=3522.1** (row 62786) — improves on pure legacy-free (12/12
+failing) but does not reach zero. **Closed FAIL.**
+
+**H1 `current_H0_grid_reseed` — FAIL, and *why* matters.** Proposed
+replacement for `old_final_reseed`: current H0 final (already paid) +
+the same 3×3 piE grid, but evaluated with a **true fixed-point forward
+objective** (`fit.objective_function(x)`, zero optimizer steps, exact
+`bounded_flux_profile`) instead of a partially-optimized probe, then
+one real TRF polish of the winner (`run_h1_grid_reseed_v2.py`, data
+`results/h1_grid_reseed_results_v2.csv`; a first version,
+`run_h1_grid_reseed.py`, used `max_nfev=3` "grid" probes and produced
+internally inconsistent results — grid-best chi2 sometimes *beaten* by
+the full polish from the same nominal point — which is impossible for
+a monotonic trust-region method and was traced to those probes not
+being true fixed-point evaluations; that version's results are
+superseded and not kept).
+
+With a genuine forward evaluation, **the grid winner is always the
+exact center `(piEN,piEE)=(0,0)`, for all 5 test events** — moving off
+center while holding `(t0,u0,tE,rho)` fixed at the H0-only optimum is
+essentially always worse, because those backbone parameters were
+optimized *for* `piE=0`. The resulting "5th H1 start" is therefore
+always numerically identical to `H0_NESTED_piE_0`, already inside
+`controlled4`, so it rescues nothing beyond what `controlled4` already
+has: **N(Δ_H1>0.1)=5/5 unchanged from `controlled4` alone**
+(85380: Δ=3.506, 79700: Δ=0.978, 50179: Δ=0.420, 86451: Δ=0.261;
+87786: Δ=−2.939, i.e. this one already happens to beat the legacy
+reference via `controlled4`, unrelated to the grid).
+
+**Mechanistic takeaway, applies to both H0 and H1:** any diagnostic or
+seed-construction scheme that holds the nonlinear backbone fixed and
+only perturbs a subset of parameters (a grid, a forward evaluation)
+cannot discover an improvement that requires those parameters to
+**co-adapt**. This is the single root cause behind every FAIL in this
+section (§7.2, §7.4, §7.5).
+
+### 7.3 Dependency-aware H0 cost — CLOSED, EXACT RESULT
+
+**Question:** B1/B2's original strategy count treated every strategy
+as costing 1, ignoring that the 8 `old_H0`-anchored `gate1_final18`
+members share one `old_H0` fit (bridge). Re-derive the true minimum
+H0 cost under `cost(S) = |S| + 1{S contains any old_H0-anchored
+strategy}`.
+
+All results below are **exact** (scipy `milp`, HiGHS branch-and-cut,
+`status=0`/proven-optimal in every solve, not a greedy heuristic —
+verified against brute-force exhaustive search for small k too),
+computed only from the 52 already-existing oracle strategy results
+(`results/gate1_oracle_diagnostics.csv`) plus one new read-only
+quantity (below). Script: `h0_exact_milp.py`.
+
+1. **Baseline exact minimum strategy count (no bridge concept)
+   = 18**, requiring exactly 8 `old_H0`-anchored strategies — this
+   reproduces (and formally validates) the original
+   `analyze_gate1_start_cover.py` MILP result that produced
+   `gate1_final18`; that original result was itself already an exact
+   MILP solve, not greedy.
+2. **Truth-only coverage of all 100 events is proven infeasible**
+   (`status=2`, HiGHS-proven, not a search-budget artifact) — at least
+   one `old_H0`-anchored strategy is mathematically mandatory for
+   zero-failure coverage within this pool.
+3. **`old_H0[:4]` re-evaluated with the current objective** (forward,
+   zero optimizer steps, exact `bounded_flux_profile`, all 100 events
+   — script `eval_old_h0_vector_current_objective.py`, data
+   `results/old_h0_vector_current_objective.csv`) rescues only
+   **6/100 events on its own** (median Δ≈109) — not usable as a
+   general-purpose free candidate.
+4. **Exact dependency-aware MILP, allowing that re-evaluated bridge
+   point as a free coverage option once `bridge=1`: minimum total
+   true TRF cost = 19** (18 downstream + 1 bridge), **unchanged** by
+   including the free bridge-vector option — the 6 events it covers
+   are already covered redundantly by other mandatory strategies.
+
+**`minimum true H0 worst-case cost = 19 TRF` is an exact result within
+the 52-strategy oracle pool studied on `extreme100`, not a
+mathematical statement about any conceivable fitter or strategy
+design** — a genuinely new strategy family (not in the 52-pool) could
+in principle do better; none tested in this session did.
+
+### 7.4 Fisher/curvature as a stopping diagnostic — CLOSED, FAIL
+
+**Question:** after 1-2 real TRF fits, does local curvature
+(Gauss-Newton Fisher of the profiled-flux objective, dimensionless
+coordinates `(Δt0/tE, u0, log tE, log rho[, piEN, piEE])`, documented
+transform in `fisher_engine.py`) let us **certify** a subset of events
+safe to stop on, with zero false-safes?
+
+Implementation (`fisher_engine.py`, `run_fisher_h0.py`,
+`run_fisher_h1.py`, `analyze_fisher.py`; data
+`results/fisher_h0_results.csv`, `results/fisher_h1_results.csv`)
+validated bit-exact against the frozen fitter's own chi2 (<1e-7 H0,
+<1e-11 H1 agreement).
+
+- **H0** (step1 = best single truth strategy, step2 = best truth pair,
+  both already-existing fits, no new TRF): every Fisher predictor
+  tested (condition number, min eigenvalue, logdet, max correlation,
+  per-coordinate σ, weakest-eigenvector components, inter-step Fisher
+  distance) sits at AUC 0.50-0.63. Best zero-false-safe stop fraction:
+  **6% after 1 TRF, 13% after 2 TRF** (best 2-predictor OR).
+- **H1** (truth → full TRF): somewhat higher AUC (up to 0.65,
+  Schur-complement `F_pi|eta` diagnostics ≈0.62-0.64) but zero-false-safe
+  stop fraction still collapses to **4% individually, 5% best 2-combo
+  OR**.
+- Fisher is cheap (≈1/20-1/32 of one TRF in wall time) but that is
+  irrelevant given the predictive power.
+
+**Root cause (§7.2's mechanistic takeaway applies again): local
+curvature at a solution is blind to the existence of a distant,
+better basin** — a sharply-determined local optimum looks identical
+in Fisher terms whether or not a better one exists elsewhere.
+**Closed FAIL as a standalone stopping diagnostic.**
+
+### 7.5 Multi-fidelity scouting (cheap global scout → rank → full TRF only for top-k) — CLOSED, FAIL
+
+**Question:** does *some* cheap global signal (not local curvature)
+correlate with final optimized quality well enough to safely skip
+full optimization on most strategies?
+
+**Stage A — fixed-start forward chi2 — FAIL.** For each event,
+forward-evaluated (zero optimizer steps) the literal initial vector of
+all 13 distinct physical starts used by the 52-strategy oracle (mode
+does not affect the initial vector, only the optimizer's internal
+path, so 52 strategies collapse to 13 distinct starting points ×
+4 modes). Script `run_h0_scout_stageA.py` (1300 forward evals, data
+`results/h0_scout_stageA_starts.csv`), ranking analysis
+`analyze_h0_scout_stageA.py` (`results/h0_scout_stageA_summary.csv`).
+Result: Spearman correlation between start-chi2 rank and final
+optimized-chi2 rank, per event, **mean −0.02, median −0.04** —
+essentially zero/noise. Winner localization: true winner within
+top-10 only **17%** of events, top-1 only **2%**. Top-k simulation
+(existing full-TRF results, k=1..10) never gets close to zero failures
+(62/100 still failing at k=10). **Closed FAIL** — an un-adapted
+starting chi2 does not predict optimized quality.
+
+**Stage B — short bounded-TRF scouts, `gate1_final18`'s exact 18
+strategies, run under their own coordinate mode, budgets
+`max_nfev∈{3,5,10}` frozen before running — CLOSED, FAIL.**
+Scripts: `run_h0_scout_stageB.py` (one process per mode, since TRF
+coordinate mode is fixed at `core.py` import time),
+`audit_stageB.py`, `analyze_stageB_topk.py`,
+`calibrate_full_trf_timing.py`. Data:
+`results/h0_scout_stageB_{physical,log_te,log_rho,log_te_rho}.csv`
+(5400 rows total).
+
+- **Audit: 5400/5400 scout records present and correct** — 18 unique
+  `(mode,anchor,rho_tag)` strategies × 100 events × 3 budgets, zero
+  duplicates, zero missing/extra combinations, zero monotonicity
+  violations (chi2 non-increasing as budget grows, confirming TRF's
+  trust-region descent property held throughout), nfev never exceeds
+  its budget, and scouts that converged before their budget cap
+  reproduce the original oracle52 chi2 to ~1e-7. (An earlier verbal
+  status update mis-summed the per-mode row counts as 4500/5400 — a
+  simple arithmetic slip in a chat message, not a data or code bug;
+  the underlying files were always complete, as this audit confirms.)
+- **No `(budget, k)` combination for k=1..10 reaches zero failures.**
+  Floor: **10/100 failures**, reached at budget=10, k≥9, and it does
+  not improve further with more scouting.
+  Worst-case delta at that floor is still ≈71 — nowhere near the 0.1
+  tolerance.
+- **Cost: scouting is not even cheaper for what it does achieve.**
+  Scouting all 18 strategies at budget=10 alone (≈382s/100 events)
+  already costs ≈87% of the fixed 19-TRF policy (≈439s/100 events,
+  measured); the best-performing scout configuration (budget=10, k=9,
+  still 10/100 failing) costs **≈566s — more than the fixed policy**,
+  before even counting that it still leaves 10 events unresolved.
+
+**Closed FAIL: no tested combination reaches zero failures, and none
+of the ones that get close cost less than the fixed policy — the two
+conditions that would have justified keeping this direction.**
+
+### 7.6 What NOT to repeat without new evidence
+
+- Do not re-run H0 self-seeding or H1 fixed-backbone-grid reseeding —
+  both are structurally blocked by §7.2's mechanistic finding
+  (co-adaptation is required; nothing that holds parameters fixed can
+  see it), not by an insufficient sample or an untried variant.
+- Do not re-derive the minimum H0 strategy count/cost by hand or by
+  greedy search — §7.3 is an exact, HiGHS-proven result. A different
+  answer would only ever come from changing the strategy pool itself
+  (a genuinely new starting-point family), not from re-optimizing the
+  selection over the existing 52.
+- Do not retune Fisher thresholds, add multivariate/ML combination of
+  Fisher predictors, or extend it to other coordinates — §7.4's root
+  cause (local curvature can't see distant basins) does not depend on
+  which particular curvature summary is used.
+- Do not retune Stage A/B budgets, grids, or extend Stage B to more
+  events — §7.5 is closed on both economic grounds (cost) and
+  coverage grounds (never reaches zero), independently.
+- Any new heuristic in this family should be evaluated first against
+  the same root cause identified in §7.2: does it let the parameters
+  that actually determine basin identity co-adapt, or does it hold
+  something fixed and only look at a cheap proxy?
+
+### 7.7 Reference costs used throughout this section
+
+- Fixed robust H0 policy (`gate1_final18` + bridge): **19 TRF**,
+  exact minimum (§7.3), ≈439s measured per 100 events (mean full-TRF
+  wall time ≈0.23s, averaged across the 4 coordinate modes).
+- H1 `controlled5` + t0 rescue: unchanged from §6, 5 TRF nominal
+  (+ conditional widened re-run).
+- No cheaper alternative to either was found in this session.
+
+**Next step:** morphology-informed H0 starts (new experiment, not yet
+started as of this checkpoint) — see the dedicated section once that
+experiment closes. If it also fails, the H0 optimization search is
+considered exhausted for this pre-Gate-3 cycle and Gate 3 preflight
+resumes on top of the frozen `gate1_final18`/B2/`controlled5` policies
+and the accepted 19-TRF worst-case H0 cost.
