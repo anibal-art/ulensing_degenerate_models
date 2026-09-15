@@ -1,0 +1,521 @@
+{
+  "batch_wall_s": 137.40342211723328,
+  "n_events": 9,
+  "events": [
+    {
+      "catalog_row": 929641,
+      "h5_path": "/home/anibal-pc/ulensing_degenerate_models/Parallax_LSST/lsstmonts_catalog_sedighe/validation/production_profiling/runtime_local/profiling_sample_h5/Event_929641.h5",
+      "stages": {
+        "stage1_bridge_morphology": {
+          "returncode": 0,
+          "wall_s": 1.2746224403381348,
+          "cpu_s": 3.8176699999999997
+        },
+        "stage2_h0_physical": {
+          "returncode": 0,
+          "wall_s": 1.4929225444793701,
+          "cpu_s": 3.9876899999999997
+        },
+        "stage2_h0_log_te": {
+          "returncode": 0,
+          "wall_s": 1.9455454349517822,
+          "cpu_s": 4.4899320000000005
+        },
+        "stage2_h0_log_rho": {
+          "returncode": 0,
+          "wall_s": 2.5716376304626465,
+          "cpu_s": 5.145813
+        },
+        "stage2_h0_log_te_rho": {
+          "returncode": 0,
+          "wall_s": 1.290027379989624,
+          "cpu_s": 3.8338110000000007
+        },
+        "stage3_h1": {
+          "returncode": 0,
+          "wall_s": 5.176470994949341,
+          "cpu_s": 7.720801999999999
+        }
+      },
+      "total_wall_s": 13.751837015151978,
+      "total_cpu_s": 28.995718,
+      "n_bridge_trf": 1,
+      "n_h0_downstream_trf": 15,
+      "n_old_final_trf": 10,
+      "n_controlled5_trf": 5,
+      "n_h1_trf": 15,
+      "total_trf": 31,
+      "h0_final_chi2": 442.2718636614595,
+      "h0_final_label": "log_rho/truth/1.0",
+      "h1_final_chi2": 438.4676937316984,
+      "h1_final_label": "H0_NESTED_piE_0",
+      "stage1_wall_s": 1.2746224403381348,
+      "stage1_cpu_s": 3.8176699999999997,
+      "stage2_wall_s": 7.300132989883423,
+      "stage2_cpu_s": 17.457246,
+      "stage3_wall_s": 5.176470994949341,
+      "stage3_cpu_s": 7.720801999999999,
+      "old_final_wall_s": 2.6554079055786133,
+      "old_final_cpu_s": 2.2863554419999987,
+      "old_final_polish_ran": false
+    },
+    {
+      "catalog_row": 835459,
+      "h5_path": "/home/anibal-pc/ulensing_degenerate_models/Parallax_LSST/lsstmonts_catalog_sedighe/validation/production_profiling/runtime_local/profiling_sample_h5/Event_835459.h5",
+      "stages": {
+        "stage1_bridge_morphology": {
+          "returncode": 0,
+          "wall_s": 1.5185389518737793,
+          "cpu_s": 4.082628000000003
+        },
+        "stage2_h0_physical": {
+          "returncode": 0,
+          "wall_s": 1.6080260276794434,
+          "cpu_s": 4.161775999999996
+        },
+        "stage2_h0_log_te": {
+          "returncode": 0,
+          "wall_s": 1.8631293773651123,
+          "cpu_s": 4.479064000000001
+        },
+        "stage2_h0_log_rho": {
+          "returncode": 0,
+          "wall_s": 2.6032798290252686,
+          "cpu_s": 5.383136
+        },
+        "stage2_h0_log_te_rho": {
+          "returncode": 0,
+          "wall_s": 1.2860536575317383,
+          "cpu_s": 4.033351000000003
+        },
+        "stage3_h1": {
+          "returncode": 0,
+          "wall_s": 4.669753551483154,
+          "cpu_s": 7.470521999999995
+        }
+      },
+      "total_wall_s": 13.54958200454712,
+      "total_cpu_s": 29.610477,
+      "n_bridge_trf": 1,
+      "n_h0_downstream_trf": 15,
+      "n_old_final_trf": 10,
+      "n_controlled5_trf": 5,
+      "n_h1_trf": 15,
+      "total_trf": 31,
+      "h0_final_chi2": 472.4331450717889,
+      "h0_final_label": "log_rho/old_H0/1.0",
+      "h1_final_chi2": 340.7661646492702,
+      "h1_final_label": "old_final_reseed",
+      "stage1_wall_s": 1.5185389518737793,
+      "stage1_cpu_s": 4.082628000000003,
+      "stage2_wall_s": 7.3604888916015625,
+      "stage2_cpu_s": 18.057327,
+      "stage3_wall_s": 4.669753551483154,
+      "stage3_cpu_s": 7.470521999999995,
+      "old_final_wall_s": 2.4341204166412354,
+      "old_final_cpu_s": 2.035538832,
+      "old_final_polish_ran": false
+    },
+    {
+      "catalog_row": 378870,
+      "h5_path": "/home/anibal-pc/ulensing_degenerate_models/Parallax_LSST/lsstmonts_catalog_sedighe/validation/production_profiling/runtime_local/profiling_sample_h5/Event_378870.h5",
+      "stages": {
+        "stage1_bridge_morphology": {
+          "returncode": 0,
+          "wall_s": 1.2703564167022705,
+          "cpu_s": 4.0058679999999995
+        },
+        "stage2_h0_physical": {
+          "returncode": 0,
+          "wall_s": 1.5501720905303955,
+          "cpu_s": 4.213260999999996
+        },
+        "stage2_h0_log_te": {
+          "returncode": 0,
+          "wall_s": 1.8203673362731934,
+          "cpu_s": 4.422816999999995
+        },
+        "stage2_h0_log_rho": {
+          "returncode": 0,
+          "wall_s": 2.7336478233337402,
+          "cpu_s": 5.352290000000011
+        },
+        "stage2_h0_log_te_rho": {
+          "returncode": 0,
+          "wall_s": 1.3224730491638184,
+          "cpu_s": 4.067134999999993
+        },
+        "stage3_h1": {
+          "returncode": 0,
+          "wall_s": 5.523863077163696,
+          "cpu_s": 8.316947000000013
+        }
+      },
+      "total_wall_s": 14.221530675888062,
+      "total_cpu_s": 30.378318000000007,
+      "n_bridge_trf": 1,
+      "n_h0_downstream_trf": 15,
+      "n_old_final_trf": 10,
+      "n_controlled5_trf": 5,
+      "n_h1_trf": 15,
+      "total_trf": 31,
+      "h0_final_chi2": 539.6904031061268,
+      "h0_final_label": "log_te/old_H0/1.0",
+      "h1_final_chi2": 536.6802857187979,
+      "h1_final_label": "H0_NESTED_piE_0",
+      "stage1_wall_s": 1.2703564167022705,
+      "stage1_cpu_s": 4.0058679999999995,
+      "stage2_wall_s": 7.4266602993011475,
+      "stage2_cpu_s": 18.055502999999995,
+      "stage3_wall_s": 5.523863077163696,
+      "stage3_cpu_s": 8.316947000000013,
+      "old_final_wall_s": 3.160949468612671,
+      "old_final_cpu_s": 2.7106379979999993,
+      "old_final_polish_ran": false
+    },
+    {
+      "catalog_row": 395956,
+      "h5_path": "/home/anibal-pc/ulensing_degenerate_models/Parallax_LSST/lsstmonts_catalog_sedighe/validation/production_profiling/runtime_local/profiling_sample_h5/Event_395956.h5",
+      "stages": {
+        "stage1_bridge_morphology": {
+          "returncode": 0,
+          "wall_s": 1.262221336364746,
+          "cpu_s": 3.9607599999999934
+        },
+        "stage2_h0_physical": {
+          "returncode": 0,
+          "wall_s": 1.5532710552215576,
+          "cpu_s": 4.283163000000002
+        },
+        "stage2_h0_log_te": {
+          "returncode": 0,
+          "wall_s": 1.8276824951171875,
+          "cpu_s": 4.568567000000002
+        },
+        "stage2_h0_log_rho": {
+          "returncode": 0,
+          "wall_s": 2.714698553085327,
+          "cpu_s": 5.480345999999997
+        },
+        "stage2_h0_log_te_rho": {
+          "returncode": 0,
+          "wall_s": 1.2428522109985352,
+          "cpu_s": 3.973183999999989
+        },
+        "stage3_h1": {
+          "returncode": 0,
+          "wall_s": 5.271730661392212,
+          "cpu_s": 8.002894000000012
+        }
+      },
+      "total_wall_s": 13.873070478439331,
+      "total_cpu_s": 30.268913999999995,
+      "n_bridge_trf": 1,
+      "n_h0_downstream_trf": 15,
+      "n_old_final_trf": 11,
+      "n_controlled5_trf": 5,
+      "n_h1_trf": 16,
+      "total_trf": 32,
+      "h0_final_chi2": 1387.7803878356776,
+      "h0_final_label": "log_rho/truth/0.1",
+      "h1_final_chi2": 362.7983773251338,
+      "h1_final_label": "truth",
+      "stage1_wall_s": 1.262221336364746,
+      "stage1_cpu_s": 3.9607599999999934,
+      "stage2_wall_s": 7.338504314422607,
+      "stage2_cpu_s": 18.30525999999999,
+      "stage3_wall_s": 5.271730661392212,
+      "stage3_cpu_s": 8.002894000000012,
+      "old_final_wall_s": 3.018352508544922,
+      "old_final_cpu_s": 2.4969840039999993,
+      "old_final_polish_ran": true
+    },
+    {
+      "catalog_row": 769381,
+      "h5_path": "/home/anibal-pc/ulensing_degenerate_models/Parallax_LSST/lsstmonts_catalog_sedighe/validation/production_profiling/runtime_local/profiling_sample_h5/Event_769381.h5",
+      "stages": {
+        "stage1_bridge_morphology": {
+          "returncode": 0,
+          "wall_s": 1.2620017528533936,
+          "cpu_s": 3.9949569999999994
+        },
+        "stage2_h0_physical": {
+          "returncode": 0,
+          "wall_s": 1.473125696182251,
+          "cpu_s": 4.216736999999995
+        },
+        "stage2_h0_log_te": {
+          "returncode": 0,
+          "wall_s": 1.8132860660552979,
+          "cpu_s": 4.525919000000002
+        },
+        "stage2_h0_log_rho": {
+          "returncode": 0,
+          "wall_s": 2.5164663791656494,
+          "cpu_s": 5.2779060000000015
+        },
+        "stage2_h0_log_te_rho": {
+          "returncode": 0,
+          "wall_s": 1.2773077487945557,
+          "cpu_s": 3.8798769999999934
+        },
+        "stage3_h1": {
+          "returncode": 0,
+          "wall_s": 18.260334968566895,
+          "cpu_s": 21.04909600000002
+        }
+      },
+      "total_wall_s": 26.60331392288208,
+      "total_cpu_s": 42.94449200000001,
+      "n_bridge_trf": 1,
+      "n_h0_downstream_trf": 15,
+      "n_old_final_trf": 11,
+      "n_controlled5_trf": 5,
+      "n_h1_trf": 16,
+      "total_trf": 32,
+      "h0_final_chi2": 188.14586914485446,
+      "h0_final_label": "physical/truth/0.1",
+      "h1_final_chi2": 188.07910544663758,
+      "h1_final_label": "H0_NESTED_piE_0",
+      "stage1_wall_s": 1.2620017528533936,
+      "stage1_cpu_s": 3.9949569999999994,
+      "stage2_wall_s": 7.080185890197754,
+      "stage2_cpu_s": 17.90043899999999,
+      "stage3_wall_s": 18.260334968566895,
+      "stage3_cpu_s": 21.04909600000002,
+      "old_final_wall_s": 16.105926752090454,
+      "old_final_cpu_s": 15.617709243,
+      "old_final_polish_ran": true
+    },
+    {
+      "catalog_row": 893531,
+      "h5_path": "/home/anibal-pc/ulensing_degenerate_models/Parallax_LSST/lsstmonts_catalog_sedighe/validation/production_profiling/runtime_local/profiling_sample_h5/Event_893531.h5",
+      "stages": {
+        "stage1_bridge_morphology": {
+          "returncode": 0,
+          "wall_s": 1.2246479988098145,
+          "cpu_s": 3.938279999999992
+        },
+        "stage2_h0_physical": {
+          "returncode": 0,
+          "wall_s": 1.4987330436706543,
+          "cpu_s": 4.061830999999984
+        },
+        "stage2_h0_log_te": {
+          "returncode": 0,
+          "wall_s": 1.8069865703582764,
+          "cpu_s": 4.40529699999999
+        },
+        "stage2_h0_log_rho": {
+          "returncode": 0,
+          "wall_s": 2.5845749378204346,
+          "cpu_s": 5.162844000000035
+        },
+        "stage2_h0_log_te_rho": {
+          "returncode": 0,
+          "wall_s": 1.3462483882904053,
+          "cpu_s": 4.037199999999984
+        },
+        "stage3_h1": {
+          "returncode": 0,
+          "wall_s": 4.732914447784424,
+          "cpu_s": 7.4747879999999896
+        }
+      },
+      "total_wall_s": 13.194978952407837,
+      "total_cpu_s": 29.080239999999975,
+      "n_bridge_trf": 1,
+      "n_h0_downstream_trf": 15,
+      "n_old_final_trf": 10,
+      "n_controlled5_trf": 5,
+      "n_h1_trf": 15,
+      "total_trf": 31,
+      "h0_final_chi2": 342.50150005966645,
+      "h0_final_label": "log_rho/truth/0.1",
+      "h1_final_chi2": 332.356659495921,
+      "h1_final_label": "truth_half_piE",
+      "stage1_wall_s": 1.2246479988098145,
+      "stage1_cpu_s": 3.938279999999992,
+      "stage2_wall_s": 7.2365429401397705,
+      "stage2_cpu_s": 17.667171999999994,
+      "stage3_wall_s": 4.732914447784424,
+      "stage3_cpu_s": 7.4747879999999896,
+      "old_final_wall_s": 2.405674934387207,
+      "old_final_cpu_s": 1.9466943679999997,
+      "old_final_polish_ran": false
+    },
+    {
+      "catalog_row": 42385,
+      "h5_path": "/home/anibal-pc/ulensing_degenerate_models/Parallax_LSST/lsstmonts_catalog_sedighe/validation/production_profiling/runtime_local/profiling_sample_h5/Event_42385.h5",
+      "stages": {
+        "stage1_bridge_morphology": {
+          "returncode": 0,
+          "wall_s": 1.239640474319458,
+          "cpu_s": 3.9198040000000276
+        },
+        "stage2_h0_physical": {
+          "returncode": 0,
+          "wall_s": 1.4889757633209229,
+          "cpu_s": 4.229055999999986
+        },
+        "stage2_h0_log_te": {
+          "returncode": 0,
+          "wall_s": 1.8278565406799316,
+          "cpu_s": 4.48818399999999
+        },
+        "stage2_h0_log_rho": {
+          "returncode": 0,
+          "wall_s": 2.61492919921875,
+          "cpu_s": 5.347046000000034
+        },
+        "stage2_h0_log_te_rho": {
+          "returncode": 0,
+          "wall_s": 1.3030946254730225,
+          "cpu_s": 3.990304999999978
+        },
+        "stage3_h1": {
+          "returncode": 0,
+          "wall_s": 5.386981248855591,
+          "cpu_s": 8.181747000000001
+        }
+      },
+      "total_wall_s": 13.862182378768921,
+      "total_cpu_s": 30.156142000000017,
+      "n_bridge_trf": 1,
+      "n_h0_downstream_trf": 15,
+      "n_old_final_trf": 10,
+      "n_controlled5_trf": 5,
+      "n_h1_trf": 15,
+      "total_trf": 31,
+      "h0_final_chi2": 359.8802808546498,
+      "h0_final_label": "physical/old_H0/1.0",
+      "h1_final_chi2": 267.9026104840919,
+      "h1_final_label": "truth_half_piE",
+      "stage1_wall_s": 1.239640474319458,
+      "stage1_cpu_s": 3.9198040000000276,
+      "stage2_wall_s": 7.234856128692627,
+      "stage2_cpu_s": 18.054590999999988,
+      "stage3_wall_s": 5.386981248855591,
+      "stage3_cpu_s": 8.181747000000001,
+      "old_final_wall_s": 3.0291616916656494,
+      "old_final_cpu_s": 2.5677878629999995,
+      "old_final_polish_ran": false
+    },
+    {
+      "catalog_row": 8681,
+      "h5_path": "/home/anibal-pc/ulensing_degenerate_models/Parallax_LSST/lsstmonts_catalog_sedighe/validation/production_profiling/runtime_local/profiling_sample_h5/Event_8681.h5",
+      "stages": {
+        "stage1_bridge_morphology": {
+          "returncode": 0,
+          "wall_s": 1.2172064781188965,
+          "cpu_s": 3.9448150000000055
+        },
+        "stage2_h0_physical": {
+          "returncode": 0,
+          "wall_s": 1.670661449432373,
+          "cpu_s": 4.394657999999964
+        },
+        "stage2_h0_log_te": {
+          "returncode": 0,
+          "wall_s": 1.8586196899414062,
+          "cpu_s": 4.562310000000025
+        },
+        "stage2_h0_log_rho": {
+          "returncode": 0,
+          "wall_s": 2.9610159397125244,
+          "cpu_s": 5.604093000000006
+        },
+        "stage2_h0_log_te_rho": {
+          "returncode": 0,
+          "wall_s": 1.2774207592010498,
+          "cpu_s": 4.006013999999993
+        },
+        "stage3_h1": {
+          "returncode": 0,
+          "wall_s": 5.5055091381073,
+          "cpu_s": 8.284063000000003
+        }
+      },
+      "total_wall_s": 14.491174697875977,
+      "total_cpu_s": 30.795952999999997,
+      "n_bridge_trf": 1,
+      "n_h0_downstream_trf": 15,
+      "n_old_final_trf": 10,
+      "n_controlled5_trf": 5,
+      "n_h1_trf": 15,
+      "total_trf": 31,
+      "h0_final_chi2": 213.0052214944184,
+      "h0_final_label": "log_rho/old_H0/1.0",
+      "h1_final_chi2": 211.94187735672517,
+      "h1_final_label": "H0_NESTED_piE_0",
+      "stage1_wall_s": 1.2172064781188965,
+      "stage1_cpu_s": 3.9448150000000055,
+      "stage2_wall_s": 7.7677178382873535,
+      "stage2_cpu_s": 18.56707499999999,
+      "stage3_wall_s": 5.5055091381073,
+      "stage3_cpu_s": 8.284063000000003,
+      "old_final_wall_s": 3.253919839859009,
+      "old_final_cpu_s": 2.8280086299999994,
+      "old_final_polish_ran": false
+    },
+    {
+      "catalog_row": 451245,
+      "h5_path": "/home/anibal-pc/ulensing_degenerate_models/Parallax_LSST/lsstmonts_catalog_sedighe/validation/production_profiling/runtime_local/profiling_sample_h5/Event_451245.h5",
+      "stages": {
+        "stage1_bridge_morphology": {
+          "returncode": 0,
+          "wall_s": 1.2974233627319336,
+          "cpu_s": 3.9907010000000014
+        },
+        "stage2_h0_physical": {
+          "returncode": 0,
+          "wall_s": 1.4469408988952637,
+          "cpu_s": 4.180876000000012
+        },
+        "stage2_h0_log_te": {
+          "returncode": 0,
+          "wall_s": 1.8171463012695312,
+          "cpu_s": 4.565353000000016
+        },
+        "stage2_h0_log_rho": {
+          "returncode": 0,
+          "wall_s": 2.733491897583008,
+          "cpu_s": 5.444238999999982
+        },
+        "stage2_h0_log_te_rho": {
+          "returncode": 0,
+          "wall_s": 1.288475751876831,
+          "cpu_s": 4.02407199999999
+        },
+        "stage3_h1": {
+          "returncode": 0,
+          "wall_s": 5.267601728439331,
+          "cpu_s": 8.03732500000001
+        }
+      },
+      "total_wall_s": 13.851800441741943,
+      "total_cpu_s": 30.24256600000001,
+      "n_bridge_trf": 1,
+      "n_h0_downstream_trf": 15,
+      "n_old_final_trf": 10,
+      "n_controlled5_trf": 5,
+      "n_h1_trf": 15,
+      "total_trf": 31,
+      "h0_final_chi2": 1513.4065835951887,
+      "h0_final_label": "log_te/old_H0/1.0",
+      "h1_final_chi2": 334.7703666261941,
+      "h1_final_label": "old_final_reseed",
+      "stage1_wall_s": 1.2974233627319336,
+      "stage1_cpu_s": 3.9907010000000014,
+      "stage2_wall_s": 7.286054849624634,
+      "stage2_cpu_s": 18.21454,
+      "stage3_wall_s": 5.267601728439331,
+      "stage3_cpu_s": 8.03732500000001,
+      "old_final_wall_s": 2.716484785079956,
+      "old_final_cpu_s": 2.2694961310000004,
+      "old_final_polish_ran": false
+    }
+  ],
+  "n_failures": 0,
+  "failures": []
+}
