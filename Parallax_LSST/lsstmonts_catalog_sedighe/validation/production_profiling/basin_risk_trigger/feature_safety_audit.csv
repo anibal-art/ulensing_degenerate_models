@@ -1,0 +1,14 @@
+feature,production_safe,source,truth_reference_leakage
+chi2nu_h0,True,H0 fit / morphology seed / light curve only,False
+morph_mismatch,True,H0 fit / morphology seed / light curve only,False
+dlogtE,True,H0 fit / morphology seed / light curve only,False
+dlogrho,True,H0 fit / morphology seed / light curve only,False
+du0,True,H0 fit / morphology seed / light curve only,False
+dt0_over_tE,True,H0 fit / morphology seed / light curve only,False
+d_bounds,True,H0 fit / morphology seed / light curve only,False
+R_max_resid,True,H0 fit / morphology seed / light curve only,False
+T50_resid,True,H0 fit / morphology seed / light curve only,False
+T75_resid,True,H0 fit / morphology seed / light curve only,False
+dw_stat,True,H0 fit / morphology seed / light curve only,False
+logkappa_J,True,H0 fit / morphology seed / light curve only,False
+abs_A_resid,True,H0 fit / morphology seed / light curve only,False
