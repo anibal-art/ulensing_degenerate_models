@@ -29,6 +29,16 @@ number worth carrying forward.
 
 ## Empirical p(Delta_chi2_LRT | H0), n=59
 
+Re-run with the v2 final policy (adds safeguard 1, same-point
+continuation on catastrophic false convergence -- `FINAL_POLICY.md`):
+distribution is numerically IDENTICAL to the v1 run below, because
+continuation fired on 0/59 H0 fits and only 2/59 (3.4%) H1 fits under the
+null, each with negligible chi2 change (consistent with 0/59 chi2-sanity
+flags observed either version) -- `results/
+h0_calibration_delta_lrt_v2_60events.csv`. Average TRF/event rises
+slightly to 2.61 (from 2.58) from those 2 extra continuation fits;
+rescue fraction unchanged.
+
 `results/h0_calibration_delta_lrt_60events.csv`.
 
 - range: `[0.0, 11.369]` (0.0 achievable exactly because the nested
@@ -57,25 +67,50 @@ Quantiles and bootstrap threshold uncertainty (20000 resamples,
 | **0.05** | **0.95** | **5.851** | **[4.672, 8.759]** |
 | 0.01 | 0.99 | 9.687 | [6.239, 11.369] |
 
-## Chosen alpha and threshold
+## CORRECTED (2026-09-15): alpha is NOT chosen here
 
-**alpha = 5%, calibrated threshold = 5.85** (90% CI [4.67, 8.76]).
-Reasoning: at N=59, the alpha=1% quantile is dominated by the single
-highest observed value (11.37) and its bootstrap CI spans nearly the
-entire observed range (6.2-11.4) -- not resolved with any real confidence
-at this sample size. alpha=10% is well-resolved but a coarser
-false-positive budget than typically wanted for a detection claim.
-alpha=5% is the best-resolved choice that is still a scientifically
-conventional false-positive budget. **Not the illustrative threshold=9**
-used earlier for descriptive purposes only -- this is the first real
-calibration pass.
+An earlier version of this document picked alpha=5% and justified it by
+what N=59 happens to resolve well. **That reasoning was backwards and has
+been retracted.** Alpha is a scientific operating choice (how many false
+positives are acceptable in the 1M-event population, and what that costs
+in missed real detections) -- it must be specified independent of
+whatever a convenience-sized calibration sample can currently measure,
+not backed into from sample-size convenience.
 
-**This is explicitly a provisional, first-pass calibration**, not a
-final production threshold: N=59 gives single-digit-count precision at
-alpha=5% (~3 order statistics inform the estimate) and essentially no
-precision at alpha=1%. Before committing this threshold to the actual 1M
-run, if the target alpha is 1% or smaller, or if the CI width above
-[4.67, 8.76] is not acceptable, the calibration sample should be extended
-substantially (several hundred to ~1000+ events, following exactly the
-same procedure) -- this is a resourcing/time decision for the user, not
-made here.
+**N=59 is retained only as a FIRST-PASS reference point**:
+`q95 ~5.85, 90% bootstrap CI ~[4.67, 8.76]` -- not adopted as a threshold,
+not implying alpha=5% is the chosen operating point.
+
+### Sample size required per candidate alpha
+
+Tail count (expected number of null events at or above the threshold)
+governs the precision of the quantile/threshold estimate -- roughly,
+relative uncertainty on the estimated tail probability scales like
+`1/sqrt(tail_count)`. Order-of-magnitude guide (`tail_count = N * alpha`):
+
+| N | alpha=0.05 -> tail count | alpha=0.01 -> tail count | alpha=0.001 -> tail count |
+|---|---|---|---|
+| 200 | 10 | 2 | 0.2 |
+| 1000 | 50 | 10 | 1 |
+| 2000 | 100 | 20 | 2 |
+| 5000 | 250 | 50 | 5 |
+| 10000 | 500 | 100 | 10 |
+
+Matches the values given in the closure instructions exactly (N=1000:
+alpha=0.05->~50, alpha=0.01->~10; N=2000: alpha=0.05->~100, alpha=0.01->
+~20; N=5000: alpha=0.01->~50). As a rule of thumb, a tail count of
+~20-50+ gives a reasonably stable quantile estimate; single-digit tail
+counts (this project's current N=59 at alpha=0.01, tail count~0.6) should
+not be treated as a resolved threshold.
+
+### Stopping for the scientific alpha decision
+
+**This is a stop point.** The calibration sample should not be extended
+further, and no threshold should be adopted as final, until alpha is
+explicitly specified (by the user / the science requirements this
+detection is feeding into -- e.g. a target false-positive count in the 1M
+population, or a specific p-value convention). Once alpha is specified,
+the required N follows directly from the table above, and the H0
+calibration sample can be extended to that N using the exact same,
+unmodified procedure (`build_h0_calibration_sample.py`,
+`final_policy.py`) -- no retuning, no algorithm changes.

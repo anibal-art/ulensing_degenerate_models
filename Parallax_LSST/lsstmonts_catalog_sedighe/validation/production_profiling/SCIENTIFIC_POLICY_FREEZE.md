@@ -1,50 +1,60 @@
 # Scientific policy freeze -- pre-1M-production checkpoint
 
-Freezes every element the user's closure instructions asked to freeze,
-each already fully specified in its own document; this file is the single
-pointer/summary tying them together for the tag.
+## STATUS (2026-09-15): NOT approved for production. STOP per the basin-gap finding.
 
-| element | frozen as | doc |
+Commit `52dd116` (this document's first version) was explicitly NOT a
+final production approval. Four methodological blockers were raised for
+resolution without reopening a general fitter-strategy search:
+
+| # | blocker | resolution |
 |---|---|---|
-| fitting policy | 1 H0 TRF + 1 H1 TRF/event, truth start for the matching model, truth-blind morphology start for the other, `H0_NESTED_piE_0`-style embedding for the H0-generated->H1 case | `FINAL_POLICY.md` |
-| bounds | `production_candidate` (`run_bounds_audit_refit_core.py` `BOUNDS_PROFILES["production_candidate"]`): `u0∈[-10,10]`, `tE∈[0.1,500000]`, `rho∈[1e-7,10]`, `piEN,piEE∈[-40,40]`, data-driven `t0` | `TWO_FIT_ARCHITECTURE.md` §1 |
-| morphology estimator | `morphology_seed.py: morphology_seed_from_curves(curves)`, truth-blind by construction (signature has no truth argument), reuses the frozen `extract_event_morphology` + FSPL dimensionless lookup unchanged | `TWO_FIT_ARCHITECTURE.md` §2 |
-| numerical nested rescue | if `chi2_H1 > chi2_H0 + 1e-6`: 1 extra H1 TRF at the H0 solution embedded with `piEN=piEE=0`; retain the min. `optimality>0.05` continuation explicitly NOT adopted. Catastrophic false convergence flagged (reduced chi2 > 50) for review, not auto-re-fit | `FINAL_POLICY.md` |
-| LRT definition | `Delta_chi2_LRT = chi2_H0 - chi2_H1` (both from the final policy, rescue included) | `final_policy.py` |
-| alpha | 5% | `H0_CALIBRATION.md` |
-| calibrated threshold | 5.85 (90% bootstrap CI [4.67, 8.76], N=59 -- explicitly provisional, see caveat below) | `H0_CALIBRATION.md` |
-| failure-handling rules | nested rescue triggers automatically and only on `chi2_H1>chi2_H0+eps`; `reduced_chi2>50` sets an advisory `sanity_flags` entry, logged, never auto-re-fit or silently dropped; `morphology_seed_from_curves`returning `None` (not measurable) skips the affected fit and records `estimator_failure`, never substitutes truth or another value | `FINAL_POLICY.md`, `H0_CALIBRATION.md` |
+| 1 | basin-gap risk mischaracterized as "absorbed by calibration" | **Corrected.** It is not absorbed; status was OPEN pending data -- `BASIN_GAP_VALIDATION.md` |
+| 2 | materiality of the basin gap unknown (n=25 only) | **Measured, N=100 independent sample. NOT NEGLIGIBLE: ~10-14% clean, false-detection-direction classification disagreement across the whole plausible threshold range.** `BASIN_GAP_VALIDATION.md` |
+| 3 | alpha=5% picked from what N=59 could resolve | **Corrected.** Alpha is not chosen; N=59 kept as a first-pass reference point only, sample-size-vs-alpha table provided, explicit stop for the user's scientific alpha decision -- `H0_CALIBRATION.md` |
+| 4 | failure handling needed an explicit, automatic, production-safe rule | **Defined and measured.** Same-point continuation on `reduced_chi2>50` (adopted, trigger rate measured), nested rescue (already adopted), `morphology_not_measurable` handling rule (identical for calibration and production) -- `FINAL_POLICY.md` |
+| 5 | throughput measured fitting-only, not end-to-end | **Corrected.** End-to-end (materialize+gate+fit) measured; the earlier "ready within a week" conclusion is retracted for at least one of two plausible readings of "1M" -- `PRODUCTION_PROFILING_FINAL.md` |
 
-## Known, quantified, NOT-fixed residual risks (carried forward explicitly, not hidden)
+**Per the pre-agreed stop rule, blocker #2's result is decisive: the
+basin gap is NOT negligible, so this checkpoint STOPS here and reports,
+rather than proceeding to production or auto-adding a second H0 start.**
 
-1. **Wrong-model single-start basin gap** (`BASIN_GAP_VALIDATION.md`):
-   systematic, directional (inflates `Delta_chi2_LRT`, i.e. biases toward
-   claiming detection) risk from the single morphology-seeded start for
-   whichever model is NOT the generating one. Quantified on n=25
-   independent H1-generated events: median diff ~0.7 (unflagged),
-   p90/p95 ~163/295, one clean reclassification (row 603127, no
-   sanity-flag warning) at every threshold tested. Self-consistently
-   absorbed into the H0-calibration threshold (same policy runs under
-   both null and alternative), but costs statistical power relative to a
-   robust multistart reference -- not eliminated by calibration.
-2. **H0-calibration sample size** (`H0_CALIBRATION.md`): N=59 valid
-   events is a time-boxed, first-pass calibration. alpha=5% is
-   reasonably resolved (90% CI [4.67,8.76]); alpha=1% is NOT (CI
-   [6.24,11.37], dominated by 1-2 order statistics). If the science needs
-   alpha<=1%, extend the calibration sample substantially before
-   committing to the 1M run.
-3. **Estimator failure rate**: 1/60 = 1.7% of the calibration sample hit
-   `morphology_not_measurable`. At 1M events this is ~17000 events that
-   would need this same honest failure handling (skip + flag, not
-   invented values) -- a real, small, already-measured tax on completion
-   rate, not a blocker.
+## What is frozen as characterized fact (not as a production go-ahead)
 
-## Tag
+| element | current state | doc |
+|---|---|---|
+| nominal fitting policy | 1 H0 TRF + 1 H1 TRF/event, truth start for the matching model, truth-blind morphology start for the other | `FINAL_POLICY.md` |
+| bounds | `production_candidate`, truth-independent absolute `u0,tE,rho,piEN,piEE`, data-driven `t0` | `TWO_FIT_ARCHITECTURE.md` |
+| morphology estimator | `morphology_seed_from_curves(curves)`, truth-blind by construction | `TWO_FIT_ARCHITECTURE.md` |
+| safeguard 1 (adopted) | same-point continuation on `reduced_chi2>50`; measured trigger rate 12% (n=25), repairs 2/3 catastrophic cases seen, 1/3 (genuine local-min trap) stays flagged | `FINAL_POLICY.md` |
+| safeguard 2 (adopted) | nested H1 rescue on `chi2_H1>chi2_H0+eps`; fires 16-58% depending on regime, resolves every negative-LRT case | `FINAL_POLICY.md` |
+| `morphology_not_measurable` handling | skip the affected fit, record `estimator_failure`, exclude from LRT stats, count in failure-rate denominator -- identical rule for calibration and production | `FINAL_POLICY.md`, measured 1.7% (n=60) |
+| alpha | **NOT chosen.** N=59 first-pass reference point only (q95~5.85, 90% CI [4.67,8.76]); sample-size-vs-alpha table provided for the user's explicit decision | `H0_CALIBRATION.md` |
+| calibrated threshold | **NOT finalized** -- depends on the alpha decision above | `H0_CALIBRATION.md` |
+| wrong-model basin-gap risk | **NOT negligible**: ~10-14% clean classification disagreement (false-detection direction) across threshold 4-25, on an independent N=100 sample | `BASIN_GAP_VALIDATION.md` |
+| end-to-end throughput | fitting alone: ~8000 events/hour/core. End-to-end (materialize+gate+fit): materialization dominates by ~14.7x; the 1-week target is NOT clearly met under either reading of "1M" at any efficiency measured this session | `PRODUCTION_PROFILING_FINAL.md` |
 
-`git tag -a scientific-policy-freeze-v1-2026-09-15` on the commit that
-adds this file and all documents/scripts/results listed above. Message:
-freezes the simplified 2(+1)-fit architecture, `production_candidate`
-bounds, truth-blind morphology estimator, nested-rescue-only safeguard,
-alpha=5%/threshold=5.85 first-pass H0 calibration, ahead of the 1M
-H1-generated Sedighe production run. Explicitly notes the two residual
-risks above as known and carried forward, not resolved.
+## Readiness verdict
+
+**NOT ready for the 1M-event production launch.** Two independent,
+measured blockers each individually justify holding, before any question
+of fitter redesign:
+
+1. The wrong-model single-start basin gap materially changes
+   classification for ~10-14% of otherwise-clean events across the whole
+   plausible threshold range -- this would bias any power/detectability
+   estimate computed from the 1M run. Per the stop rule, do not
+   auto-resurrect a 15-start H0 search; the only pre-authorized next
+   step (one additional deterministic truth-blind H0 start) is
+   unimplemented and untested.
+2. Alpha and the final LRT threshold remain unspecified as a matter of
+   explicit scientific choice, and end-to-end (not fitting-only)
+   throughput does not clearly meet the 1-week target for the more
+   demanding of two plausible readings of "1M events."
+
+## No tag
+
+The `scientific-policy-freeze-v1-2026-09-15` tag on `52dd116` stands as a
+historical marker of the (now-corrected) first-pass state; it is
+explicitly NOT re-affirmed as a production approval by this document, and
+no new tag is created until the basin-gap finding is addressed and alpha
+is specified.

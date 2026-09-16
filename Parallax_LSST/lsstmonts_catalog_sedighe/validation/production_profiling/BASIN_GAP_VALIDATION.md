@@ -1,114 +1,119 @@
-# Independent wrong-model basin-gap validation (H1-generated, n=25)
+# Independent wrong-model basin-gap validation
 
-Question: does the single-start, truth-blind morphology seed for the
-wrong model materially alter detectability decisions relative to a
-robust/multistart search, and in which direction?
+## STATUS: NOT NEGLIGIBLE -- STOP, per the pre-agreed stop rule
 
-## Method
+The expanded, independent N=100 validation below found clean (chi2-
+sanity-unflagged), classification-changing basin gaps in the
+**false-detection direction at ~10-14% of clean events** across the
+entire plausible calibration threshold range (4-25), 95% CI lower bound
+never below ~5%. **This is not negligible.** Per the pre-agreed rule:
+"If they are not negligible, STOP and report. Do not automatically
+resurrect 15-start H0." This document reports the finding; no
+architecture change is made here. The only pre-authorized next step (one
+additional deterministic truth-blind H0 start, tested separately) has
+NOT been implemented -- that is a decision for the user to authorize.
 
-All 25 events of the frozen H1-generated profiling sample
-(`results/profiling_sample_frozen_100.csv`, seed 424242, zero overlap
-with any development/calibration/smoke sample). Not used to tune
-anything -- the final policy (`final_policy.py`) was frozen before this
-run and nothing here fed back into it.
+## Method (N=100, independent of every other sample used in this project)
 
-- **Candidate**: `final_policy.py`'s frozen 2(+1)-fit policy
-  (`results/final_policy_h1generated_25events.json`).
-- **Reference**: an `old_final`-free robust multistart (1 bridge + 15 H0
-  strategies across 4 coordinate modes + 4 controlled H1 starts = 20
-  TRF/event; built specifically for this validation,
-  `stage_h1_controlled4.py` / `orchestrator_robust_reference_controlled4.py`,
-  `results/robust_reference_controlled4_25events.json`) -- chosen over the
-  `old_final`-based 9-event reference used earlier because it runs
-  uniformly on all 25 events without the 64% crash rate documented in
-  `FEASIBILITY_AUDIT.md`. Not part of the frozen production policy;
-  reference-only.
+- **Candidate**: `final_policy.py` v2 (2-4 TRF/event, truth start for the
+  generating model, morphology-seed start for the other, both adopted
+  safeguards), on a NEW frozen H1-generated sample, seed 838383, zero
+  overlap with development, extreme100, the 25-event profiling sample, or
+  any H0-generated sample (`results/h1_basin_validation_sample_frozen.csv`,
+  verified programmatically before use). Nothing was retuned on this
+  sample. `results/final_policy_h1basinvalidation_100events.json`.
+- **Reference**: the same `old_final`-free, 20-TRF controlled4 robust
+  multistart used for the earlier n=25 check (1 bridge + 15 H0 strategies
+  across 4 coordinate modes + 4 controlled H1 starts), run on the SAME
+  100 events. `results/robust_reference_controlled4_h1basin_100events.json`.
+- Analysis: `analyze_basin_validation.py`,
+  `results/basin_gap_validation_100events.csv`.
 
-Full per-event table: `results/basin_gap_validation_25events.csv`.
+## Basin-gap distribution
 
-## Distribution of Delta-LRT differences
+n=100, all valid (0 `morphology_not_measurable`). **7/100 (7%)** triggered
+the frozen policy's own chi2-sanity flag (reduced chi2 > 50) -- these are
+excluded from the classification analysis below exactly as the policy's
+own failure-handling rule intends (flagged for review, not silently used
+in a detectability decision); see `FINAL_POLICY.md`.
 
-n=25. 3/25 events (848426, 793762, 451245) triggered the frozen policy's
-own `chi2_dof_sanity_flag` (`FINAL_POLICY.md`) -- self-diagnosed
-catastrophic H0 false convergence, not silent. Reporting both with and
-without them:
+Clean (unflagged) n=93: mean diff = 365.2 (dominated by a few huge
+gaps), **median diff = 0.34** (typical-case agreement remains good),
+p90 abs diff = 514.6, p95 abs diff = 1980.5, max abs diff = 8259.9.
 
-| | all n=25 | unflagged n=22 |
-|---|---|---|
-| bias (mean diff) | 11221.3 | 62.95 |
-| median diff | 1.46 | 0.70 |
-| p90 abs diff | 1751.8 | 163.4 |
-| p95 abs diff | 25119.8 | 294.9 |
-| max abs diff | 245889.2 (451245, flagged) | 662.2 (row 61773) |
+## Classification disagreement vs threshold grid (clean events only, n=93)
 
-The 3 flagged events are entirely responsible for the huge headline
-bias/p90/p95 -- they are exactly the cases the policy's own sanity check
-already catches and marks for review, so they should not be silently
-included in an automated detectability decision. **They are not swept
-under the rug**: they ARE real failures of the nominal fit, but they are
-self-diagnosable and would be caught before any downstream use, which is
-the entire point of the sanity flag.
+| threshold | false_detect (simple>=thr, ref<thr) | opposite (simple<thr, ref>=thr) | total | fraction | 95% CI |
+|---|---|---|---|---|---|
+| 2 | 3 | 1 | 4/93 | 4.3% | [1.2%, 10.6%] |
+| 3 | 4 | 7 | 11/93 | 11.8% | [6.1%, 20.2%] |
+| 4 | 8 | 4 | 12/93 | 12.9% | [6.8%, 21.5%] |
+| **5** | **9** | **3** | **12/93** | **12.9%** | **[6.8%, 21.5%]** |
+| 6 | 9 | 4 | 13/93 | 14.0% | [7.7%, 22.7%] |
+| **7** | **10** | **0** | **10/93** | **10.8%** | **[5.3%, 18.9%]** |
+| 8 | 12 | 1 | 13/93 | 14.0% | [7.7%, 22.7%] |
+| **9** | **11** | **0** | **11/93** | **11.8%** | **[6.1%, 20.2%]** |
+| 12 | 12 | 0 | 12/93 | 12.9% | [6.8%, 21.5%] |
+| 16 | 11 | 0 | 11/93 | 11.8% | [6.1%, 20.2%] |
+| 20 | 13 | 0 | 13/93 | 14.0% | [7.7%, 22.7%] |
+| 25 | 13 | 0 | 13/93 | 14.0% | [7.7%, 22.7%] |
 
-## Sign/direction of bias
+**Across the entire plausible calibration interval (threshold 4-9,
+`H0_CALIBRATION.md`'s alpha=5-10% region lands around 4.7-5.9): 9-12/93
+clean events (~10-13%) disagree, essentially ALL in the false-detection
+direction** (`simple>=threshold, reference<threshold` -- the simplified
+policy claims detection where a robust search does not). The opposite
+(conservative) direction is small and inconsistent (0-7, no clear
+pattern), confirming the directional bias found in the n=25 sample: this
+is not symmetric threshold noise, it is a one-sided inflation of
+`Delta_chi2_LRT`.
 
-**Systematically positive, even excluding the 3 flagged events**: median
-diff = +0.70 (not ~0), and of the meaningful (non-negligible) remaining
-gaps, every one has `Delta_chi2_LRT_final_policy > Delta_chi2_LRT_reference`
-(rows 603127: +161.1, 61773: +662.2, 625238: +86.2, 597046: +10.2,
-893531: +13.1, 320298: +2.0, 185746: +1.1, 721826: +1.5). Root cause,
-confirmed by inspection on every one of these: **the H1 side matches the
-reference almost exactly** (truth-start already finds ~the same optimum a
-robust multistart does, as expected -- e.g. row 603127: 355.20 vs
-355.11), while **the H0 side (morphology-seeded, single start) lands in a
-measurably worse-but-plausible-looking local optimum** than the robust
-search's best (row 603127: chi2=519.6, reduced chi2=1.69 -- looks
-completely fine on its own -- vs the reference's 358.4, found via a
-truth-anchored, differently-coordinatized strategy the simplified policy
-never tries). This inflated chi2_H0 systematically inflates
-`Delta_chi2_LRT`, i.e. **the simplification's single-start wrong-model
-risk biases toward CLAIMING parallax detection, not toward missing it.**
+**Material disagreement (|diff| > 5), independent of any threshold**:
+**30/93 = 32.3%** of clean events (95% CI [22.9%, 42.7%]).
 
-## Catastrophic (non-flagged) basin gap -- row 603127
+## Root cause, confirmed at n=100 exactly as at n=25
 
-The clearest case that a real, undetected-by-sanity-check basin gap can
-flip a classification: `Delta_chi2_LRT_final_policy = 164.4` vs
-`Delta_chi2_LRT_reference = 3.3`. At every illustrative threshold tested
-(4, 9, 16, 25) this event reclassifies from "not detected" (reference) to
-"strongly detected" (final policy) -- entirely because of the H0 basin
-gap above, with BOTH chi2 values individually looking perfectly ordinary
-(reduced chi2 1.69 and 1.16). **This is the residual risk the stop rule
-asks to be judged**, not something fixed here.
+Every large disagreement traces to the same mechanism: the H1
+(truth-seeded, correctly-specified) side matches the robust reference
+closely, while the H0 (morphology-seeded, wrong-model) side lands in a
+measurably worse local optimum that a 15-strategy/4-coordinate-mode
+search finds and a single morphology start does not. Three representative
+clean (unflagged, reduced chi2 well under 50) cases:
 
-## Classification disagreement vs threshold
+| row | chi2_H0 (simple) | reduced chi2 | reference chi2_H0 (strategy) | chi2_H1 (simple) | reference chi2_H1 |
+|---|---|---|---|---|---|
+| 236102 | 3396.2 | 10.5 | 311.2 (`log_te/truth/0.01`) | 308.1 | 308.1 (`truth_half_piE`) |
+| 114675 | 2082.3 | 7.4 | 266.8 (`physical/truth/0.1`) | 263.2 | 261.4 (`H0_NESTED_piE_0`) |
+| 788605 | 1912.7 | 17.9 | 109.5 (`log_rho/old_H0/0.01`) | 108.9 | 107.0 (`truth_mirror_u0_piEN`) |
 
-| illustrative threshold | reclassified (of 25) | rows |
-|---|---|---|
-| 4 | 1 | 603127 |
-| 9 | 2 | 848426 (flagged), 603127 |
-| 16 | 3 | 848426 (flagged), 893531, 603127 |
-| 25 | 2 | 848426 (flagged), 603127 |
+**Important refinement of the sanity-flag's coverage**: these three (and
+most of the classification-flipping disagreements) have reduced chi2 in
+the **7-18 range** -- clearly elevated above the normal 0.75-4.5 band,
+but well under the `CHI2_DOF_SANITY_THRESHOLD=50` used for catastrophic
+false convergence. **The chi2-sanity flag catches only the most extreme
+failures; it does not catch, and was never intended to catch, this
+"medium-severity" basin-gap band, which is exactly where most of the
+classification-flipping disagreements live.** This is a distinct failure
+mode from the catastrophic false-convergence cases in `FINAL_POLICY.md`
+-- these are stable, converged (`optimizer_success=True`, plausible
+reduced chi2 for a merely-imperfect fit), just landing in a real, wrong,
+local optimum relative to what a multistart search reaches.
 
-Row 603127 reclassifies at every threshold tested -- it is not a
-near-threshold borderline artifact, it is a large, threshold-independent
-gap. Row 893531 (diff=+13.1) is genuinely near-threshold-sensitive: it
-reclassifies only when the threshold falls between `d_ref=10.14` and
-`d_simple=23.29` (illustrated at threshold=16). This is the kind of
-near-threshold disagreement the validation was specifically asked to
-surface.
+## Verdict
 
-## Implication for calibration (important, not a fix)
+**Not negligible.** Per the stop rule: STOP here. The 2-fit architecture,
+as currently specified (single deterministic morphology-seed start for
+the wrong model), produces classification-changing, false-detection-
+direction disagreements on the order of 10-14% of clean events across the
+entire plausible operating threshold range -- this would materially
+inflate any power/detectability estimate computed from the 1M
+H1-generated production run relative to what a robust search would find,
+exactly the concern raised in the corrected interpretation above (this
+document's earlier version, now superseded).
 
-Because the H0 fit's single-start basin bias is systematic and directional
-(inflates `Delta_chi2_LRT`), and because the H0-calibration step (§4,
-`H0_CALIBRATION.md`) estimates `p(Delta_chi2_LRT | H0)` using this EXACT
-same final policy (same single-start H0-basin behavior) on genuinely
-H0-generated events, the resulting calibrated threshold will already
-reflect however much this bias also inflates the NULL distribution --
-i.e. the false-positive rate at the chosen alpha should still be correctly
-controlled by construction. What calibration does NOT fix is the loss of
-statistical POWER this adds: extra basin-driven variance in Delta_chi2_LRT
-under H1 requires a higher threshold to hold alpha fixed, which costs
-some true detections relative to a robust-multistart policy. This
-efficiency cost is real, quantified above, and not eliminated by
-calibration -- it is exactly the tradeoff the stop rule asks to be judged
-against the ~16-29x runtime speedup.
+**Not resolved here.** Per the stop rule, no fitter redesign was
+attempted. The only pre-authorized next step -- at most one additional
+deterministic, truth-blind H0 start -- has NOT been implemented; it would
+need its own separate test (does adding it reduce the false-detection
+rate above to a negligible level, at what TRF cost) before being
+considered for adoption.
