@@ -2,42 +2,17 @@
 
 ## Scientific objective
 
-The purpose of this pipeline is to measure annual-parallax detectability
-in simulated Rubin-only FSPL light curves using
+The effective TRF scaling is `x_scale='jac'`. This was verified
+directly by instrumenting `scipy.optimize.least_squares` along the same
+runtime path used by `run_lrt_policy_batch.py`: both the H0 fit and the
+nested H1 fit received `x_scale='jac'`.
 
-    D = chi2_H0 - chi2_H1,
-
-where:
-
-- H0 is FSPL without annual parallax;
-- H1 is FSPL with annual parallax;
-- H0 is nested in H1 at piEN = piEE = 0.
-
-This is a simulation-based likelihood-ratio study, not a blind real-data
-search pipeline. Truth may therefore be used as an initialization aid
-for the model that generated the simulated event. All nonlinear
-parameters remain free during optimization.
-
-Flux parameters are profiled through bounded weighted least squares.
-
-## Frozen numerical domain
-
-Production candidate:
-
-- coordinates: physical;
-- TRF x_scale: original pyLIMA scaling;
-- t0 bounds: data-driven photometry domain;
-- u0: [-10, 10];
-- tE: [0.1, 500000];
-- rho: [1e-7, 10];
-- piEN: [-40, 40];
-- piEE: [-40, 40].
-
-The RuntimeWarning produced by pyLIMA when a nested H1 start contains
-piEN = piEE = 0 is understood: the original scaling evaluates log10(0),
-but the corresponding scale evaluates to 1 after the final +1.
-The validated production-profiling calculations used this same pyLIMA
-scaling, so it is retained for consistency.
+Earlier logs reporting `mode=pylima` described an intermediate pyLIMA
+scaling path rather than the argument ultimately passed to SciPy. The
+previous `log10(0)` warning for nested H1 starts with
+`piEN=piEE=0` originated in that intermediate calculation. With the
+runtime mode now explicitly set to `jac`, the configured mode and the
+effective optimizer configuration agree.
 
 ## Nominal fitting matrix
 
@@ -142,4 +117,4 @@ The final policy was smoke-tested on:
 
 The H1-generated result reproduces the previously validated
 H1-projected-H0 result. The H0-generated regression is exactly
-reproducible under explicit `x_scale=pylima`.
+reproducible under explicit `x_scale=jac`.

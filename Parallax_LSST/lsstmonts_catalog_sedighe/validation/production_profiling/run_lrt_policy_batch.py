@@ -5,6 +5,7 @@ import json
 import os
 import sys
 import time
+import traceback
 
 HERE = os.path.dirname(os.path.abspath(__file__))
 BA = os.path.join(HERE, "..", "bounds_audit")
@@ -35,10 +36,10 @@ parser.add_argument(
 args = parser.parse_args()
 
 # ------------------------------------------------------------
-# Frozen production choices
+# Frozen production-candidate numerical choices
 # ------------------------------------------------------------
 os.environ["HIDDEN_PARALLAX_TRF_COORDS"] = "physical"
-os.environ["HIDDEN_PARALLAX_TRF_X_SCALE"] = "pylima"
+os.environ["HIDDEN_PARALLAX_TRF_X_SCALE"] = "jac"
 os.environ["HIDDEN_PARALLAX_T0_MARGIN_FACTOR"] = "0"
 
 # Import the fitting core under the wide production-candidate bounds.
@@ -79,94 +80,178 @@ if args.limit is not None:
         args.limit
     ).copy()
 
+out_path = os.path.abspath(args.out)
+out_dir = os.path.dirname(out_path)
+
+if out_dir:
+    os.makedirs(out_dir, exist_ok=True)
+
 results = []
 
 batch_wall0 = time.time()
 batch_cpu0 = time.process_time()
 
+
+def build_payload():
+    n_success = sum(
+        r.get("status") == "success"
+        for r in results
+    )
+
+    n_failed = sum(
+        r.get("status") == "failure"
+        for r in results
+    )
+
+    return {
+        "policy_name": POLICY_NAME,
+        "bounds_profile": core.BOUNDS_PROFILE,
+        "coordinates": os.environ[
+            "HIDDEN_PARALLAX_TRF_COORDS"
+        ],
+        "x_scale": os.environ[
+            "HIDDEN_PARALLAX_TRF_X_SCALE"
+        ],
+        "t0_margin_factor": os.environ[
+            "HIDDEN_PARALLAX_T0_MARGIN_FACTOR"
+        ],
+        "batch_wall_s": (
+            time.time() - batch_wall0
+        ),
+        "batch_cpu_s": (
+            time.process_time() - batch_cpu0
+        ),
+        "n_requested_events": int(len(manifest)),
+        "n_processed_events": int(len(results)),
+        "n_success": int(n_success),
+        "n_failed": int(n_failed),
+        "events": results,
+    }
+
+
+def write_checkpoint():
+    payload = build_payload()
+
+    tmp_path = out_path + ".tmp"
+
+    with open(
+        tmp_path,
+        "w",
+    ) as handle:
+        json.dump(
+            payload,
+            handle,
+            indent=2,
+            default=str,
+        )
+
+    os.replace(
+        tmp_path,
+        out_path,
+    )
+
+    return payload
+
+
 for _, row_entry in manifest.iterrows():
 
     h5_path = row_entry["h5_path"]
 
-    meta = load_new_case(
-        h5_path,
-        core,
+    fallback_row = row_entry.get(
+        "catalog_row",
+        None,
     )
 
     event_wall0 = time.time()
     event_cpu0 = time.process_time()
 
-    result = run_lrt_fit_policy(
-        meta,
-        core,
-        fit_lc,
-    )
+    try:
+        meta = load_new_case(
+            h5_path,
+            core,
+        )
 
-    result["event_wall_s"] = (
-        time.time() - event_wall0
-    )
+        result = run_lrt_fit_policy(
+            meta,
+            core,
+            fit_lc,
+        )
 
-    result["event_cpu_s"] = (
-        time.process_time() - event_cpu0
-    )
+        result["status"] = "success"
+        result["h5_path"] = h5_path
+        result["event_wall_s"] = (
+            time.time() - event_wall0
+        )
+        result["event_cpu_s"] = (
+            time.process_time() - event_cpu0
+        )
 
-    results.append(
-        result
-    )
+        results.append(
+            result
+        )
 
-    print(
-        f"row={meta['row']} "
-        f"gen={meta['generating_model']} "
-        f"nominal={result['n_nominal_trf']} "
-        f"continuations={result['n_continuation_trf']} "
-        f"rescue={result['n_rescue_trf']} "
-        f"total={result['n_total_trf']} "
-        f"h0_winner={result.get('h0_winner')} "
-        f"chi2_h0={result.get('chi2_h0')} "
-        f"chi2_h1={result.get('chi2_h1')} "
-        f"D={result.get('delta_chi2_lrt')} "
-        f"nesting_ok={result.get('final_nesting_ok')} "
-        f"wall={result['event_wall_s']:.2f}s",
-        flush=True,
-    )
+        print(
+            f"row={meta['row']} "
+            f"gen={meta['generating_model']} "
+            f"status=success "
+            f"nominal={result['n_nominal_trf']} "
+            f"continuations={result['n_continuation_trf']} "
+            f"rescue={result['n_rescue_trf']} "
+            f"total={result['n_total_trf']} "
+            f"h0_winner={result.get('h0_winner')} "
+            f"chi2_h0={result.get('chi2_h0')} "
+            f"chi2_h1={result.get('chi2_h1')} "
+            f"D={result.get('delta_chi2_lrt')} "
+            f"nesting_ok={result.get('final_nesting_ok')} "
+            f"wall={result['event_wall_s']:.2f}s",
+            flush=True,
+        )
 
-payload = {
-    "policy_name": POLICY_NAME,
-    "bounds_profile": core.BOUNDS_PROFILE,
-    "coordinates": os.environ[
-        "HIDDEN_PARALLAX_TRF_COORDS"
-    ],
-    "x_scale": os.environ[
-        "HIDDEN_PARALLAX_TRF_X_SCALE"
-    ],
-    "t0_margin_factor": os.environ[
-        "HIDDEN_PARALLAX_T0_MARGIN_FACTOR"
-    ],
-    "batch_wall_s": (
-        time.time() - batch_wall0
-    ),
-    "batch_cpu_s": (
-        time.process_time() - batch_cpu0
-    ),
-    "n_events": len(results),
-    "events": results,
-}
+    except Exception as exc:
 
-with open(
-    args.out,
-    "w",
-) as handle:
-    json.dump(
-        payload,
-        handle,
-        indent=2,
-        default=str,
-    )
+        failure = {
+            "status": "failure",
+            "catalog_row": (
+                None
+                if pd.isna(fallback_row)
+                else fallback_row
+            ),
+            "h5_path": h5_path,
+            "exception_type": type(exc).__name__,
+            "exception_message": str(exc),
+            "traceback": traceback.format_exc(),
+            "event_wall_s": (
+                time.time() - event_wall0
+            ),
+            "event_cpu_s": (
+                time.process_time() - event_cpu0
+            ),
+        }
+
+        results.append(
+            failure
+        )
+
+        print(
+            f"row={fallback_row} "
+            f"status=failure "
+            f"exception={type(exc).__name__}: {exc}",
+            flush=True,
+        )
+
+    # Persist every completed event so that a later interruption
+    # cannot erase already-finished work.
+    write_checkpoint()
+
+
+payload = write_checkpoint()
 
 print(
     f"DONE "
     f"policy={POLICY_NAME} "
-    f"events={len(results)} "
+    f"processed={payload['n_processed_events']} "
+    f"success={payload['n_success']} "
+    f"failed={payload['n_failed']} "
     f"batch_wall_s={payload['batch_wall_s']:.1f}s "
-    f"-> {args.out}"
+    f"-> {out_path}"
 )

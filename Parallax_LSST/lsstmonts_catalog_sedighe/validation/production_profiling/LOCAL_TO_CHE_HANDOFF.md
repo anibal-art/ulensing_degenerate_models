@@ -21,7 +21,7 @@ Numerical setup:
 
 - bounds profile: `production_candidate`;
 - coordinates: `physical`;
-- x_scale: `pylima`;
+- x_scale: `jac`;
 - bounded flux profiling enabled;
 - EPSILON_NUMERIC = 1e-6.
 

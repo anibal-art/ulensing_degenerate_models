@@ -32,7 +32,7 @@ Development sample:
 - 15 dangerous events under the original one-H0-start candidate;
 - truth-started H1 projection repaired 11/15 dangerous events;
 - blind-H1 projection repaired only 2/15;
-- 14 dangerous cases remained after the blind variant;
+- 13 dangerous cases remained after the blind variant;
 - the blind variant produced no evidence of a robust replacement for
   the truth-started H1 projection.
 
