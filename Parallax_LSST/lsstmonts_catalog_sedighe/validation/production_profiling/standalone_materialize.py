@@ -7,29 +7,99 @@ patches) but calling ONLY the pure-simulation functions
 sim_fit/sim_fit_multi_fits/run_single_event -- so the old FAST H1
 fit is never invoked as a side effect.
 
-Config: configs/validation/production_profiling/PROFILING_SIM_LOCAL.json
-(a copy of FAST.json with paths corrected for this machine; only the
-paths/observing/truth/simulation/rubin/selection sections are used --
-the "fit" section is never read by anything this script calls).
+Config:
+- CLI use: pass --config explicitly.
+- Imported use: set LRT_MATERIALIZE_CONFIG if a non-default config is needed.
+- Portable default: configs/repro/LRT_REPRO_V1.json.
+
+Only the simulation-relevant sections are consumed by the calls below.
+No fit is executed by this module.
 """
-import sys
+import argparse
+import json
 import os
+import sys
 import time
 
 HERE = os.path.dirname(os.path.abspath(__file__))
 DRIVER_DIR = os.path.dirname(os.path.dirname(HERE))  # lsstmonts_catalog_sedighe
 sys.path.insert(0, DRIVER_DIR)
 
-CONFIG_PATH = os.path.join(HERE, "..", "..", "configs", "validation",
-                            "production_profiling", "PROFILING_SIM_LOCAL.json")
-CONFIG_PATH = os.path.abspath(CONFIG_PATH)
+# ============================================================
+# NEW BLOCK: portable config bootstrap
+# ============================================================
 
-sys.argv = ["run_lsstmonts_catalog_hidden_parallax.py", "--config", CONFIG_PATH]
+_ORIGINAL_ARGV = list(sys.argv)
+
+DEFAULT_CONFIG_PATH = os.path.abspath(
+    os.path.join(
+        DRIVER_DIR,
+        "configs",
+        "repro",
+        "LRT_REPRO_V1.json",
+    )
+)
+
+
+def _resolve_materialize_config_path(value):
+    return os.path.abspath(
+        os.path.expanduser(
+            os.path.expandvars(str(value))
+        )
+    )
+
+
+def _select_bootstrap_config():
+    # When executed as a CLI, inspect only --config before importing
+    # the production driver, because the driver loads its config at
+    # import time.
+    if __name__ == "__main__":
+        parser = argparse.ArgumentParser(add_help=False)
+
+        parser.add_argument(
+            "--config",
+            default=os.environ.get(
+                "LRT_MATERIALIZE_CONFIG",
+                DEFAULT_CONFIG_PATH,
+            ),
+        )
+
+        args, _ = parser.parse_known_args(
+            _ORIGINAL_ARGV[1:]
+        )
+
+        return _resolve_materialize_config_path(
+            args.config
+        )
+
+    # Imported use remains deterministic and does not inspect the
+    # importing program's sys.argv.
+    return _resolve_materialize_config_path(
+        os.environ.get(
+            "LRT_MATERIALIZE_CONFIG",
+            DEFAULT_CONFIG_PATH,
+        )
+    )
+
+
+CONFIG_PATH = _select_bootstrap_config()
+
+# The production driver must see its own CLI, not standalone-specific
+# arguments such as --catalog-row or --generating-model.
+sys.argv = [
+    "run_lsstmonts_catalog_hidden_parallax.py",
+    "--config",
+    CONFIG_PATH,
+]
 
 import numpy as np  # noqa: E402
 import pandas as pd  # noqa: E402
 import run_lsstmonts_catalog_hidden_parallax as driver  # noqa: E402
 import functions_roman_rubin as frr  # noqa: E402
+
+# Restore the standalone CLI after the driver has completed its
+# import-time configuration.
+sys.argv = _ORIGINAL_ARGV
 
 _WORKER_INITIALIZED = False
 
@@ -200,3 +270,102 @@ def materialize_event(catalog_row, out_dir, timing=None, generating_model="H1"):
 
     return {"catalog_row": catalog_row, "status": "materialized",
             "h5_path": h5_path, "global_i": task["global_i"], **t}
+
+
+# ============================================================
+# NEW BLOCK: standalone CLI
+# ============================================================
+
+def _build_cli_parser():
+    parser = argparse.ArgumentParser(
+        description=(
+            "Materialize one deterministic microlensing event "
+            "without running any fit."
+        )
+    )
+
+    parser.add_argument(
+        "--config",
+        default=os.environ.get(
+            "LRT_MATERIALIZE_CONFIG",
+            DEFAULT_CONFIG_PATH,
+        ),
+        help=(
+            "Portable simulation JSON/YAML config. "
+            "It is loaded before the production driver is imported."
+        ),
+    )
+
+    parser.add_argument(
+        "--catalog-row",
+        type=int,
+        required=True,
+        help="Zero-based LSSTMONTS catalog row.",
+    )
+
+    parser.add_argument(
+        "--generating-model",
+        choices=("H0", "H1"),
+        required=True,
+        help=(
+            "H0 = genuine no-parallax simulation; "
+            "H1 = annual-parallax simulation."
+        ),
+    )
+
+    parser.add_argument(
+        "--out-dir",
+        required=True,
+        help="Directory where Event_<catalog_row>.h5 is written.",
+    )
+
+    return parser
+
+
+def main():
+    args = _build_cli_parser().parse_args()
+
+    requested_config = _resolve_materialize_config_path(
+        args.config
+    )
+
+    # The driver was already configured at import time. Refuse any
+    # inconsistent late config instead of silently using another one.
+    if requested_config != CONFIG_PATH:
+        raise RuntimeError(
+            "Config mismatch after driver import: "
+            f"bootstrap={CONFIG_PATH!r}, "
+            f"CLI={requested_config!r}."
+        )
+
+    out_dir = os.path.abspath(
+        os.path.expanduser(
+            os.path.expandvars(args.out_dir)
+        )
+    )
+
+    os.makedirs(
+        out_dir,
+        exist_ok=True,
+    )
+
+    result = materialize_event(
+        catalog_row=args.catalog_row,
+        out_dir=out_dir,
+        timing={},
+        generating_model=args.generating_model,
+    )
+
+    print(
+        json.dumps(
+            result,
+            indent=2,
+            default=str,
+        )
+    )
+
+    return 0
+
+
+if __name__ == "__main__":
+    raise SystemExit(main())

@@ -1,0 +1,65 @@
+{
+  "directories": {
+    "rubin_throughputs_baseline": {
+      "n_files": 31,
+      "sha256": "13beb66eab9f4a0e9ae71fad845e28067f46999aaae707166f9900027a69cfed"
+    }
+  },
+  "files": {
+    "catalog_columns": {
+      "sha256": "45b1545e3c25228d7805ae7ec63fe4dff259d590bbaab38b28537c1961885be9",
+      "size": 2812
+    },
+    "catalog_data": {
+      "sha256": "93245fcb16464c014462516f190d5593e21ad8c92ada3e9c6451704e079b785c",
+      "size": 678332049
+    },
+    "config": {
+      "sha256": "f6db79c521031a4fd3957a9cdce97440727bf26768dfc3eb77a29358abf45c6b",
+      "size": 7193
+    },
+    "driver": {
+      "sha256": "10555d29b865c8854a286cee3f715b09cd982455a4397d8b7eb1a6f4d27f126f",
+      "size": 321177
+    },
+    "fit_lc": {
+      "sha256": "9a14b26e3bcafa44fa5b1dd3e054dc510c10ca1ede6c2e900674df1cc59504d4",
+      "size": 54713
+    },
+    "functions_roman_rubin": {
+      "sha256": "8e3029e1859cff502a16d9c81b3b073560fa3732e0688a4e968db2edd65144c2",
+      "size": 165702
+    },
+    "opsim_db": {
+      "sha256": "7f1e153376aba26fae420b6dd860263f89a5cb0046625f0dfcdbdccdf89bbcd8",
+      "size": 747802624
+    },
+    "roman_ephemerides": {
+      "sha256": "6e6c5781800817daf75f58093f94f3654fdd31d15ad9393559b565dd3ad1f61b",
+      "size": 55008
+    },
+    "set_telescopes_pyLIMA": {
+      "sha256": "f90ba5dd2c18a4cd0d1b29a3560ec4a576b13499cc0fb335f7fa20bdd2366e6b",
+      "size": 50868
+    },
+    "standalone_materialize": {
+      "sha256": "503fe3ef02385813b7f2a7b80d6fe7ddcaf89b1c40230f94799c9bca140a1577",
+      "size": 11933
+    }
+  },
+  "name": "LRT_REPRO_V1",
+  "packages": {
+    "astropy": "5.3.4",
+    "h5py": "3.11.0",
+    "numpy": "1.26.3",
+    "pandas": "2.1.4",
+    "pyLIMA": "1.9.8",
+    "pyerfa": "2.0.1.5",
+    "rubin-scheduler": "3.8.0",
+    "rubin-sim": "2.2.4",
+    "scipy": "1.11.4"
+  },
+  "python": {
+    "version": "3.11.9"
+  }
+}
