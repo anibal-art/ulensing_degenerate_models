@@ -4,6 +4,7 @@ import argparse
 import copy
 import gc
 import json
+import os
 import re
 import sys
 import traceback
@@ -26,14 +27,15 @@ MANIFEST = ROOT / "refit_manifest.csv"
 OUT = ROOT / "refits"
 
 RR = Path(
-    "/home/anibal-pc/microlensing/"
-    "simulation_Rubin/roman_rubin"
-)
+    os.environ.get(
+        "ROMAN_RUBIN_DIR",
+        "~/microlensing/simulation_Rubin/roman_rubin",
+    )
+).expanduser().resolve()
 
-HP = Path(
-    "/home/anibal-pc/ulensing_degenerate_models/"
-    "Parallax_LSST/lsstmonts_catalog_sedighe"
-)
+# Repository-relative project root:
+# .../lsstmonts_catalog_sedighe/validation/bounds_audit/<this file>
+HP = Path(__file__).resolve().parents[2]
 
 CONFIG_PATH = (
     HP
@@ -51,8 +53,6 @@ sys.path.insert(0, str(RR))
 sys.path.insert(0, str(HP))
 
 import fit_lc
-
-import os
 
 # ============================================================
 # EXACT PRODUCTION BOUNDED FLUX PROFILE
@@ -3513,27 +3513,29 @@ sample = str(
     record["sample"]
 )
 
-summary_path = (
-    bounds_output_root()
-    / sample
-    / str(args.catalog_row)
-    / "summary.json"
-)
+if __name__ == "__main__":
 
-if (
-    summary_path.exists()
-    and not args.force
-    and not args.dry_run
-):
-
-    print(
-        "Already completed:",
-        summary_path,
+    summary_path = (
+        bounds_output_root()
+        / sample
+        / str(args.catalog_row)
+        / "summary.json"
     )
 
-    sys.exit(0)
+    if (
+        summary_path.exists()
+        and not args.force
+        and not args.dry_run
+    ):
 
-run_event(
-    record,
-    dry=args.dry_run,
-)
+        print(
+            "Already completed:",
+            summary_path,
+        )
+
+        sys.exit(0)
+
+    run_event(
+        record,
+        dry=args.dry_run,
+    )

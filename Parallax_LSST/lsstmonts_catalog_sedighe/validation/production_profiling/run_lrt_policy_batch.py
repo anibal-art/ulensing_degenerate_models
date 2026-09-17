@@ -47,6 +47,12 @@ sys.argv = [
     "run_bounds_audit_refit_core.py",
     "--catalog-row",
     "71181",
+    "--manifest",
+    os.path.join(
+        BA,
+        "data",
+        "refit_manifest.csv",
+    ),
     "--bounds-profile",
     "production_candidate",
     "--fit-scope",
