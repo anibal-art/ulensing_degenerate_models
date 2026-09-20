@@ -432,13 +432,667 @@ h5_dir.mkdir(
     exist_ok=True,
 )
 
-materialization_records = []
+
+# ============================================================
+# NEW BLOCK: existing chunk-state validation
+# ============================================================
+#
+# At this stage an existing ledger is read and validated only.
+# The processing loop below is intentionally unchanged and does
+# not skip any row yet.
+# ============================================================
+
+materialization_status_path = (
+    out_dir
+    / "materialization_status.csv"
+)
+
+materialization_tmp_path = (
+    out_dir
+    / "materialization_status.csv.tmp"
+)
+
+resume_df = None
+
+if materialization_status_path.is_file():
+
+    resume_df = pd.read_csv(
+        materialization_status_path
+    )
+
+    required_columns = {
+        "catalog_row",
+        "generating_model",
+        "status",
+        "selected_for_fitting",
+        "wall_time_s",
+        "global_i",
+        "h5_path",
+    }
+
+    missing_columns = (
+        required_columns
+        - set(resume_df.columns)
+    )
+
+    if missing_columns:
+        raise RuntimeError(
+            "Existing materialization ledger is missing "
+            f"columns: {sorted(missing_columns)}"
+        )
+
+    if resume_df["catalog_row"].isna().any():
+        raise RuntimeError(
+            "Existing materialization ledger contains "
+            "a missing catalog_row."
+        )
+
+    resume_rows = [
+        int(value)
+        for value in resume_df[
+            "catalog_row"
+        ].tolist()
+    ]
+
+    if len(resume_rows) != len(
+        set(resume_rows)
+    ):
+        raise RuntimeError(
+            "Existing materialization ledger contains "
+            "duplicate catalog rows."
+        )
+
+    expected_prefix = list(
+        range(
+            args.row_start,
+            args.row_start
+            + len(resume_rows),
+        )
+    )
+
+    if resume_rows != expected_prefix:
+        raise RuntimeError(
+            "Existing materialization ledger is not an "
+            "ordered prefix of the requested chunk. "
+            f"rows={resume_rows[:10]!r}"
+        )
+
+    if (
+        resume_rows
+        and resume_rows[-1] >= args.row_stop
+    ):
+        raise RuntimeError(
+            "Existing materialization ledger extends "
+            "outside the requested chunk."
+        )
+
+    generating_models = set(
+        resume_df[
+            "generating_model"
+        ].astype(str)
+    )
+
+    if generating_models - {"H1"}:
+        raise RuntimeError(
+            "Existing materialization ledger contains "
+            "non-H1 rows: "
+            f"{sorted(generating_models)}"
+        )
+
+    allowed_statuses = {
+        "materialized",
+        "not_detectable",
+    }
+
+    statuses = set(
+        resume_df[
+            "status"
+        ].astype(str)
+    )
+
+    unexpected_statuses = (
+        statuses
+        - allowed_statuses
+    )
+
+    if unexpected_statuses:
+        raise RuntimeError(
+            "Existing materialization ledger contains "
+            "unexpected statuses: "
+            f"{sorted(unexpected_statuses)}"
+        )
+
+    selected_normalized = (
+        resume_df[
+            "selected_for_fitting"
+        ]
+        .astype(str)
+        .str.strip()
+        .str.lower()
+        .map(
+            {
+                "true": True,
+                "false": False,
+            }
+        )
+    )
+
+    if selected_normalized.isna().any():
+        raise RuntimeError(
+            "Existing materialization ledger contains "
+            "invalid selected_for_fitting values."
+        )
+
+    expected_selected = (
+        resume_df["status"]
+        == "materialized"
+    )
+
+    if not (
+        selected_normalized.to_numpy()
+        == expected_selected.to_numpy()
+    ).all():
+        raise RuntimeError(
+            "Existing materialization ledger has an "
+            "inconsistent selected_for_fitting flag."
+        )
+
+    # NEW BLOCK: a materialized ledger row is complete only if its
+    # scientific event JSON exists and satisfies the frozen-policy
+    # invariants. The ledger alone is not sufficient authority.
+    for _, existing_row in resume_df.iterrows():
+
+        if str(existing_row["status"]) != "materialized":
+            continue
+
+        row_id = int(
+            existing_row["catalog_row"]
+        )
+
+        h5_value = existing_row[
+            "h5_path"
+        ]
+
+        if pd.isna(h5_value):
+            raise RuntimeError(
+                f"catalog_row={row_id}: "
+                "materialized ledger row has no h5_path."
+            )
+
+        existing_h5_path = Path(
+            str(h5_value)
+        )
+
+        if not existing_h5_path.is_file():
+            raise RuntimeError(
+                f"catalog_row={row_id}: "
+                "materialized ledger row points to missing H5: "
+                f"{existing_h5_path}"
+            )
+
+        event_json_path = (
+            out_dir
+            / "events"
+            / f"Event_{row_id}.json"
+        )
+
+        if not event_json_path.is_file():
+            raise RuntimeError(
+                f"catalog_row={row_id}: "
+                "materialized ledger row has no completed "
+                f"scientific JSON: {event_json_path}"
+            )
+
+        try:
+            event_payload = json.loads(
+                event_json_path.read_text()
+            )
+        except Exception as exc:
+            raise RuntimeError(
+                f"catalog_row={row_id}: "
+                "scientific event JSON cannot be read: "
+                f"{event_json_path}"
+            ) from exc
+
+        if int(
+            event_payload.get(
+                "catalog_row",
+                -1,
+            )
+        ) != row_id:
+            raise RuntimeError(
+                f"catalog_row={row_id}: "
+                "scientific JSON catalog_row mismatch."
+            )
+
+        if (
+            event_payload.get(
+                "generating_model"
+            )
+            != "H1"
+        ):
+            raise RuntimeError(
+                f"catalog_row={row_id}: "
+                "scientific JSON generating_model is not H1."
+            )
+
+        if (
+            event_payload.get(
+                "policy_name"
+            )
+            != POLICY_NAME
+        ):
+            raise RuntimeError(
+                f"catalog_row={row_id}: "
+                "scientific JSON policy mismatch: "
+                f"{event_payload.get('policy_name')!r}"
+            )
+
+        expected_fit_counts = {
+            "n_nominal_trf": 2,
+            "n_continuation_trf": 0,
+            "n_rescue_trf": 0,
+            "n_total_trf": 2,
+        }
+
+        for key, expected in expected_fit_counts.items():
+            if event_payload.get(key) != expected:
+                raise RuntimeError(
+                    f"catalog_row={row_id}: "
+                    f"scientific JSON {key}="
+                    f"{event_payload.get(key)!r}; "
+                    f"expected {expected}"
+                )
+
+    next_uncheckpointed_row = (
+        args.row_start
+        + len(resume_rows)
+    )
+
+    print()
+    print("=" * 80)
+    print("EXISTING CHUNK STATE")
+    print("=" * 80)
+
+    print(
+        "ledger                  =",
+        materialization_status_path,
+    )
+
+    print(
+        "validated rows          =",
+        len(resume_rows),
+    )
+
+    print(
+        "materialized            =",
+        int(
+            (
+                resume_df["status"]
+                == "materialized"
+            ).sum()
+        ),
+    )
+
+    print(
+        "not detectable          =",
+        int(
+            (
+                resume_df["status"]
+                == "not_detectable"
+            ).sum()
+        ),
+    )
+
+    print(
+        "next uncheckpointed row =",
+        next_uncheckpointed_row,
+    )
+
+    print(
+        "resume action           =",
+        "validated prefix will be skipped",
+    )
+
+
+# NEW BLOCK: resume from the validated ledger prefix.
+#
+# Rows already present in the validated ledger are complete and are
+# retained in memory. Processing starts at the first row not present
+# in that ordered prefix.
+if resume_df is None:
+    materialization_records = []
+else:
+    materialization_records = []
+
+    for raw_record in resume_df.to_dict(
+        orient="records"
+    ):
+        status = str(
+            raw_record["status"]
+        )
+
+        global_i = raw_record[
+            "global_i"
+        ]
+
+        if pd.isna(global_i):
+            global_i = None
+        else:
+            global_i = int(
+                global_i
+            )
+
+        h5_path_value = raw_record[
+            "h5_path"
+        ]
+
+        if pd.isna(h5_path_value):
+            h5_path_value = None
+        else:
+            h5_path_value = str(
+                h5_path_value
+            )
+
+        materialization_records.append(
+            {
+                "catalog_row": int(
+                    raw_record["catalog_row"]
+                ),
+                "generating_model": "H1",
+                "status": status,
+                "selected_for_fitting": (
+                    status == "materialized"
+                ),
+                "wall_time_s": float(
+                    raw_record["wall_time_s"]
+                ),
+                "global_i": global_i,
+                "h5_path": h5_path_value,
+            }
+        )
+
+
+loop_start_row = (
+    args.row_start
+    + len(materialization_records)
+)
+
+CHECKPOINT_COLUMNS = [
+    "catalog_row",
+    "generating_model",
+    "status",
+    "selected_for_fitting",
+    "wall_time_s",
+    "global_i",
+    "h5_path",
+]
+
+
+def write_materialization_checkpoint():
+    """
+    Atomically persist the completed ordered prefix of this chunk.
+    """
+
+    pd.DataFrame(
+        materialization_records,
+        columns=CHECKPOINT_COLUMNS,
+    ).to_csv(
+        materialization_tmp_path,
+        index=False,
+    )
+
+    os.replace(
+        materialization_tmp_path,
+        materialization_status_path,
+    )
+
+
+
+
+def fit_materialized_h1_event(
+    catalog_row,
+    h5_path,
+):
+    """
+    Load one already-materialized H1 event, run the frozen
+    two-fit production policy, validate its invariants, and
+    atomically persist the complete scientific JSON result.
+    """
+    # NEW BLOCK: validate the materialized H1 event through
+    # the exact loader used by the frozen fitting policy.
+    #
+    # No fit is executed here.
+    meta = load_new_case(
+        str(h5_path),
+        core,
+    )
+
+    if int(meta["row"]) != catalog_row:
+        raise RuntimeError(
+            f"catalog_row={catalog_row}: "
+            "load_new_case row mismatch: "
+            f"{meta['row']}"
+        )
+
+    if int(meta["Source"]) != catalog_row:
+        raise RuntimeError(
+            f"catalog_row={catalog_row}: "
+            "load_new_case Source mismatch: "
+            f"{meta['Source']}"
+        )
+
+    if meta["generating_model"] != "H1":
+        raise RuntimeError(
+            f"catalog_row={catalog_row}: "
+            "materialized production event was not "
+            "recognized as H1: "
+            f"{meta['generating_model']!r}"
+        )
+
+    required_truth = {
+        "t0",
+        "u0",
+        "tE",
+        "rho",
+        "piEN",
+        "piEE",
+    }
+
+    missing_truth = (
+        required_truth
+        - set(meta["truth"])
+    )
+
+    if missing_truth:
+        raise RuntimeError(
+            f"catalog_row={catalog_row}: "
+            "H1 truth is incomplete after loading: "
+            f"{sorted(missing_truth)}"
+        )
+
+    print(
+        "[load] "
+        f"row={catalog_row} "
+        f"generating_model="
+        f"{meta['generating_model']} "
+        "truth=H1_complete",
+        flush=True,
+    )
+
+    # NEW BLOCK: execute the frozen final two-fit policy.
+    #
+    # Exactly:
+    #   1 x H1 TRF from the H1 truth start, physical coordinates
+    #   1 x H0 TRF from the shared truth start, log_te_rho
+    #
+    # No continuation, rescue, morphology seed, or multistart.
+    fit_wall0 = time.time()
+    fit_cpu0 = time.process_time()
+
+    fit_result = run_lrt_fit_policy(
+        meta,
+        core,
+        fit_lc,
+    )
+
+    fit_wall_s = (
+        time.time()
+        - fit_wall0
+    )
+
+    fit_cpu_s = (
+        time.process_time()
+        - fit_cpu0
+    )
+
+    # Redundant production-level enforcement of the frozen
+    # optimizer-call contract.
+    expected_counts = {
+        "n_nominal_trf": 2,
+        "n_continuation_trf": 0,
+        "n_rescue_trf": 0,
+        "n_total_trf": 2,
+    }
+
+    for key, expected in expected_counts.items():
+        actual = fit_result.get(
+            key,
+            None,
+        )
+
+        if actual != expected:
+            raise RuntimeError(
+                f"catalog_row={catalog_row}: "
+                f"{key}={actual!r}; "
+                f"expected {expected}"
+            )
+
+    final_h0 = fit_result.get(
+        "final_h0"
+    )
+
+    final_h1 = fit_result.get(
+        "final_h1"
+    )
+
+    if final_h0 is None or final_h1 is None:
+        raise RuntimeError(
+            f"catalog_row={catalog_row}: "
+            "final two-fit policy returned a missing final fit"
+        )
+
+    if (
+        final_h0.get("coordinate_mode")
+        != "log_te_rho"
+    ):
+        raise RuntimeError(
+            f"catalog_row={catalog_row}: "
+            "H1-generated -> H0 fit did not use "
+            "log_te_rho coordinates: "
+            f"{final_h0.get('coordinate_mode')!r}"
+        )
+
+    if (
+        final_h1.get("coordinate_mode")
+        != "physical"
+    ):
+        raise RuntimeError(
+            f"catalog_row={catalog_row}: "
+            "H1-generated -> H1 fit did not use "
+            "physical coordinates: "
+            f"{final_h1.get('coordinate_mode')!r}"
+        )
+
+    # The temporary H0 coordinate switch must leave the global
+    # production runtime exactly in its baseline state.
+    if (
+        os.environ.get(
+            "HIDDEN_PARALLAX_TRF_COORDS"
+        )
+        != "physical"
+    ):
+        raise RuntimeError(
+            f"catalog_row={catalog_row}: "
+            "TRF coordinate state was not restored to physical"
+        )
+
+    if (
+        os.environ.get(
+            "HIDDEN_PARALLAX_TRF_X_SCALE"
+        )
+        != "jac"
+    ):
+        raise RuntimeError(
+            f"catalog_row={catalog_row}: "
+            "TRF x_scale state was not restored to jac"
+        )
+
+    # Save the complete scientific result for this event.
+    event_record = dict(
+        fit_result
+    )
+
+    event_record["status"] = (
+        "success"
+    )
+
+    event_record["h5_path"] = str(
+        h5_path
+    )
+
+    event_record["truth"] = dict(
+        meta["truth"]
+    )
+
+    event_record["event_fit_wall_s"] = float(
+        fit_wall_s
+    )
+
+    event_record["event_fit_cpu_s"] = float(
+        fit_cpu_s
+    )
+
+    event_result_path = (
+        out_dir
+        / "events"
+        / f"Event_{catalog_row}.json"
+    )
+
+    atomic_write_json(
+        event_record,
+        event_result_path,
+    )
+
+    print(
+        "[fit] "
+        f"row={catalog_row} "
+        f"n_trf={fit_result['n_total_trf']} "
+        f"chi2_h0={fit_result['chi2_h0']:.6f} "
+        f"chi2_h1={fit_result['chi2_h1']:.6f} "
+        f"D={fit_result['delta_chi2_lrt']:.6f} "
+        f"nesting_ok="
+        f"{fit_result['final_nesting_ok']} "
+        f"dt={fit_wall_s:.2f}s",
+        flush=True,
+    )
+
+    print(
+        "[save] "
+        f"row={catalog_row} "
+        f"path={event_result_path}",
+        flush=True,
+    )
+
+
+    return event_result_path, fit_result
+
 
 materialization_start = time.time()
 
 
 for catalog_row in range(
-    args.row_start,
+    loop_start_row,
     args.row_stop,
 ):
     timing = {}
@@ -520,234 +1174,20 @@ for catalog_row in range(
             h5_path
         )
 
-        # NEW BLOCK: validate the materialized H1 event through
-        # the exact loader used by the frozen fitting policy.
-        #
-        # No fit is executed here.
-        meta = load_new_case(
-            str(h5_path),
-            core,
-        )
-
-        if int(meta["row"]) != catalog_row:
-            raise RuntimeError(
-                f"catalog_row={catalog_row}: "
-                "load_new_case row mismatch: "
-                f"{meta['row']}"
+        event_result_path, fit_result = (
+            fit_materialized_h1_event(
+                catalog_row,
+                h5_path,
             )
-
-        if int(meta["Source"]) != catalog_row:
-            raise RuntimeError(
-                f"catalog_row={catalog_row}: "
-                "load_new_case Source mismatch: "
-                f"{meta['Source']}"
-            )
-
-        if meta["generating_model"] != "H1":
-            raise RuntimeError(
-                f"catalog_row={catalog_row}: "
-                "materialized production event was not "
-                "recognized as H1: "
-                f"{meta['generating_model']!r}"
-            )
-
-        required_truth = {
-            "t0",
-            "u0",
-            "tE",
-            "rho",
-            "piEN",
-            "piEE",
-        }
-
-        missing_truth = (
-            required_truth
-            - set(meta["truth"])
-        )
-
-        if missing_truth:
-            raise RuntimeError(
-                f"catalog_row={catalog_row}: "
-                "H1 truth is incomplete after loading: "
-                f"{sorted(missing_truth)}"
-            )
-
-        print(
-            "[load] "
-            f"row={catalog_row} "
-            f"generating_model="
-            f"{meta['generating_model']} "
-            "truth=H1_complete",
-            flush=True,
-        )
-
-        # NEW BLOCK: execute the frozen final two-fit policy.
-        #
-        # Exactly:
-        #   1 x H1 TRF from the H1 truth start, physical coordinates
-        #   1 x H0 TRF from the shared truth start, log_te_rho
-        #
-        # No continuation, rescue, morphology seed, or multistart.
-        fit_wall0 = time.time()
-        fit_cpu0 = time.process_time()
-
-        fit_result = run_lrt_fit_policy(
-            meta,
-            core,
-            fit_lc,
-        )
-
-        fit_wall_s = (
-            time.time()
-            - fit_wall0
-        )
-
-        fit_cpu_s = (
-            time.process_time()
-            - fit_cpu0
-        )
-
-        # Redundant production-level enforcement of the frozen
-        # optimizer-call contract.
-        expected_counts = {
-            "n_nominal_trf": 2,
-            "n_continuation_trf": 0,
-            "n_rescue_trf": 0,
-            "n_total_trf": 2,
-        }
-
-        for key, expected in expected_counts.items():
-            actual = fit_result.get(
-                key,
-                None,
-            )
-
-            if actual != expected:
-                raise RuntimeError(
-                    f"catalog_row={catalog_row}: "
-                    f"{key}={actual!r}; "
-                    f"expected {expected}"
-                )
-
-        final_h0 = fit_result.get(
-            "final_h0"
-        )
-
-        final_h1 = fit_result.get(
-            "final_h1"
-        )
-
-        if final_h0 is None or final_h1 is None:
-            raise RuntimeError(
-                f"catalog_row={catalog_row}: "
-                "final two-fit policy returned a missing final fit"
-            )
-
-        if (
-            final_h0.get("coordinate_mode")
-            != "log_te_rho"
-        ):
-            raise RuntimeError(
-                f"catalog_row={catalog_row}: "
-                "H1-generated -> H0 fit did not use "
-                "log_te_rho coordinates: "
-                f"{final_h0.get('coordinate_mode')!r}"
-            )
-
-        if (
-            final_h1.get("coordinate_mode")
-            != "physical"
-        ):
-            raise RuntimeError(
-                f"catalog_row={catalog_row}: "
-                "H1-generated -> H1 fit did not use "
-                "physical coordinates: "
-                f"{final_h1.get('coordinate_mode')!r}"
-            )
-
-        # The temporary H0 coordinate switch must leave the global
-        # production runtime exactly in its baseline state.
-        if (
-            os.environ.get(
-                "HIDDEN_PARALLAX_TRF_COORDS"
-            )
-            != "physical"
-        ):
-            raise RuntimeError(
-                f"catalog_row={catalog_row}: "
-                "TRF coordinate state was not restored to physical"
-            )
-
-        if (
-            os.environ.get(
-                "HIDDEN_PARALLAX_TRF_X_SCALE"
-            )
-            != "jac"
-        ):
-            raise RuntimeError(
-                f"catalog_row={catalog_row}: "
-                "TRF x_scale state was not restored to jac"
-            )
-
-        # Save the complete scientific result for this event.
-        event_record = dict(
-            fit_result
-        )
-
-        event_record["status"] = (
-            "success"
-        )
-
-        event_record["h5_path"] = str(
-            h5_path
-        )
-
-        event_record["truth"] = dict(
-            meta["truth"]
-        )
-
-        event_record["event_fit_wall_s"] = float(
-            fit_wall_s
-        )
-
-        event_record["event_fit_cpu_s"] = float(
-            fit_cpu_s
-        )
-
-        event_result_path = (
-            out_dir
-            / "events"
-            / f"Event_{catalog_row}.json"
-        )
-
-        atomic_write_json(
-            event_record,
-            event_result_path,
-        )
-
-        print(
-            "[fit] "
-            f"row={catalog_row} "
-            f"n_trf={fit_result['n_total_trf']} "
-            f"chi2_h0={fit_result['chi2_h0']:.6f} "
-            f"chi2_h1={fit_result['chi2_h1']:.6f} "
-            f"D={fit_result['delta_chi2_lrt']:.6f} "
-            f"nesting_ok="
-            f"{fit_result['final_nesting_ok']} "
-            f"dt={fit_wall_s:.2f}s",
-            flush=True,
-        )
-
-        print(
-            "[save] "
-            f"row={catalog_row} "
-            f"path={event_result_path}",
-            flush=True,
         )
 
     materialization_records.append(
         record
     )
+
+    # NEW BLOCK: commit this completed row to the chunk ledger
+    # before moving to the next catalog row.
+    write_materialization_checkpoint()
 
     print(
         "[materialize] "
@@ -760,36 +1200,9 @@ for catalog_row in range(
     )
 
 
-materialization_status_path = (
-    out_dir
-    / "materialization_status.csv"
-)
-
-materialization_tmp_path = (
-    out_dir
-    / "materialization_status.csv.tmp"
-)
-
-pd.DataFrame(
-    materialization_records,
-    columns=[
-        "catalog_row",
-        "generating_model",
-        "status",
-        "selected_for_fitting",
-        "wall_time_s",
-        "global_i",
-        "h5_path",
-    ],
-).to_csv(
-    materialization_tmp_path,
-    index=False,
-)
-
-os.replace(
-    materialization_tmp_path,
-    materialization_status_path,
-)
+# Final idempotent checkpoint. This also handles the case in which
+# the requested chunk was already complete before this invocation.
+write_materialization_checkpoint()
 
 
 n_materialized = sum(
