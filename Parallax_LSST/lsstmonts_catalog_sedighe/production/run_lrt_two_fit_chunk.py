@@ -1095,6 +1095,304 @@ for catalog_row in range(
     loop_start_row,
     args.row_stop,
 ):
+
+    # ========================================================
+    # NEW BLOCK: recover an uncheckpointed materialized event
+    # ========================================================
+    #
+    # Possible interrupted state:
+    #
+    #   Event_<row>.h5 exists
+    #   Event_<row>.json does not exist
+    #   row is not yet present in the ledger
+    #
+    # In that case the simulation/detectability work is already
+    # complete. Reuse the H5 and run only the frozen two-fit policy.
+    # ========================================================
+
+    existing_h5_path = (
+        h5_dir
+        / f"Event_{catalog_row}.h5"
+    ).resolve()
+
+    existing_event_json_path = (
+        out_dir
+        / "events"
+        / f"Event_{catalog_row}.json"
+    ).resolve()
+
+    h5_already_exists = (
+        existing_h5_path.is_file()
+    )
+
+    json_already_exists = (
+        existing_event_json_path.is_file()
+    )
+
+    if (
+        json_already_exists
+        and not h5_already_exists
+    ):
+        raise RuntimeError(
+            f"catalog_row={catalog_row}: "
+            "scientific JSON exists but its H5 is missing: "
+            f"{existing_event_json_path}"
+        )
+
+    if (
+        json_already_exists
+        and h5_already_exists
+    ):
+
+        # ====================================================
+        # NEW BLOCK: recover a completed event whose ledger
+        # update was interrupted after the scientific JSON was
+        # already written.
+        # ====================================================
+        #
+        # The JSON is the authority that the two-fit scientific
+        # result completed successfully. Validate it before
+        # reconstructing the missing ledger row.
+        # ====================================================
+
+        try:
+            event_payload = json.loads(
+                existing_event_json_path.read_text()
+            )
+        except Exception as exc:
+            raise RuntimeError(
+                f"catalog_row={catalog_row}: "
+                "existing scientific JSON cannot be read: "
+                f"{existing_event_json_path}"
+            ) from exc
+
+        if int(
+            event_payload.get(
+                "catalog_row",
+                -1,
+            )
+        ) != catalog_row:
+            raise RuntimeError(
+                f"catalog_row={catalog_row}: "
+                "existing scientific JSON catalog_row mismatch."
+            )
+
+        if (
+            event_payload.get(
+                "generating_model"
+            )
+            != "H1"
+        ):
+            raise RuntimeError(
+                f"catalog_row={catalog_row}: "
+                "existing scientific JSON generating_model "
+                "is not H1."
+            )
+
+        if (
+            event_payload.get(
+                "policy_name"
+            )
+            != POLICY_NAME
+        ):
+            raise RuntimeError(
+                f"catalog_row={catalog_row}: "
+                "existing scientific JSON policy mismatch: "
+                f"{event_payload.get('policy_name')!r}"
+            )
+
+        if (
+            event_payload.get(
+                "status"
+            )
+            != "success"
+        ):
+            raise RuntimeError(
+                f"catalog_row={catalog_row}: "
+                "existing scientific JSON does not have "
+                "status='success'."
+            )
+
+        expected_fit_counts = {
+            "n_nominal_trf": 2,
+            "n_continuation_trf": 0,
+            "n_rescue_trf": 0,
+            "n_total_trf": 2,
+        }
+
+        for key, expected in expected_fit_counts.items():
+            actual = event_payload.get(
+                key
+            )
+
+            if actual != expected:
+                raise RuntimeError(
+                    f"catalog_row={catalog_row}: "
+                    f"existing scientific JSON {key}="
+                    f"{actual!r}; expected {expected}"
+                )
+
+        final_h0 = event_payload.get(
+            "final_h0"
+        )
+
+        final_h1 = event_payload.get(
+            "final_h1"
+        )
+
+        if (
+            not isinstance(final_h0, dict)
+            or not isinstance(final_h1, dict)
+        ):
+            raise RuntimeError(
+                f"catalog_row={catalog_row}: "
+                "existing scientific JSON is missing "
+                "final_h0 or final_h1."
+            )
+
+        if (
+            final_h0.get(
+                "coordinate_mode"
+            )
+            != "log_te_rho"
+        ):
+            raise RuntimeError(
+                f"catalog_row={catalog_row}: "
+                "existing H0 fit does not use "
+                "log_te_rho coordinates."
+            )
+
+        if (
+            final_h1.get(
+                "coordinate_mode"
+            )
+            != "physical"
+        ):
+            raise RuntimeError(
+                f"catalog_row={catalog_row}: "
+                "existing H1 fit does not use "
+                "physical coordinates."
+            )
+
+        payload_h5_path = event_payload.get(
+            "h5_path"
+        )
+
+        if payload_h5_path is None:
+            raise RuntimeError(
+                f"catalog_row={catalog_row}: "
+                "existing scientific JSON has no h5_path."
+            )
+
+        if (
+            Path(
+                str(payload_h5_path)
+            ).resolve()
+            != existing_h5_path
+        ):
+            raise RuntimeError(
+                f"catalog_row={catalog_row}: "
+                "scientific JSON h5_path does not match "
+                "the existing H5."
+            )
+
+        record = {
+            "catalog_row": int(
+                catalog_row
+            ),
+            "generating_model": "H1",
+            "status": "materialized",
+            "selected_for_fitting": True,
+
+            # The previous invocation completed materialization,
+            # but its materialization timing was not checkpointed.
+            "wall_time_s": None,
+
+            "global_i": int(
+                catalog_row
+            ),
+            "h5_path": str(
+                existing_h5_path
+            ),
+        }
+
+        materialization_records.append(
+            record
+        )
+
+        write_materialization_checkpoint()
+
+        print(
+            "[resume-json] "
+            f"row={catalog_row} "
+            "scientific_result=validated "
+            "ledger=reconstructed",
+            flush=True,
+        )
+
+        continue
+
+    if h5_already_exists:
+
+        recovery_wall0 = time.time()
+
+        print(
+            "[resume-h5] "
+            f"row={catalog_row} "
+            f"path={existing_h5_path}",
+            flush=True,
+        )
+
+        event_result_path, fit_result = (
+            fit_materialized_h1_event(
+                catalog_row,
+                existing_h5_path,
+            )
+        )
+
+        recovery_wall_s = (
+            time.time()
+            - recovery_wall0
+        )
+
+        record = {
+            "catalog_row": int(
+                catalog_row
+            ),
+            "generating_model": "H1",
+            "status": "materialized",
+            "selected_for_fitting": True,
+
+            # The original materialization wall time is unknown
+            # because this row is being recovered from an H5
+            # produced by a previous interrupted invocation.
+            "wall_time_s": float("nan"),
+
+            "global_i": int(
+                catalog_row
+            ),
+            "h5_path": str(
+                existing_h5_path
+            ),
+        }
+
+        materialization_records.append(
+            record
+        )
+
+        write_materialization_checkpoint()
+
+        print(
+            "[resume-h5] "
+            f"row={catalog_row} "
+            "status=completed "
+            f"n_trf={fit_result['n_total_trf']} "
+            f"dt={recovery_wall_s:.2f}s",
+            flush=True,
+        )
+
+        continue
+
     timing = {}
 
     row_start_time = time.time()
