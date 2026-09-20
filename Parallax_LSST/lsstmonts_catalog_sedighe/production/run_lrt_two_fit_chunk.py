@@ -23,6 +23,7 @@ from __future__ import annotations
 import argparse
 import json
 import os
+import re
 import sys
 from pathlib import Path
 
@@ -124,6 +125,49 @@ if not config_path.is_file():
     raise FileNotFoundError(
         f"Production config not found: {config_path}"
     )
+
+
+# ============================================================
+# NEW BLOCK: production-config environment validation
+# ============================================================
+#
+# The production JSON deliberately contains ${NAME} placeholders.
+# os.path.expandvars() leaves an undefined placeholder unchanged,
+# which can otherwise produce misleading path errors much later
+# during the heavy simulation imports.
+#
+# Validate every placeholder before importing standalone_materialize.
+# ============================================================
+
+config_text = config_path.read_text()
+
+config_environment_names = sorted(
+    set(
+        re.findall(
+            r"\$\{([A-Za-z_][A-Za-z0-9_]*)\}",
+            config_text,
+        )
+    )
+)
+
+missing_config_environment = [
+    name
+    for name in config_environment_names
+    if not os.environ.get(name)
+]
+
+if missing_config_environment:
+    formatted_missing = "\n".join(
+        f"  - {name}"
+        for name in missing_config_environment
+    )
+
+    raise RuntimeError(
+        "Unresolved environment variables in production config:\n"
+        f"{formatted_missing}\n"
+        f"config={config_path}"
+    )
+
 
 out_dir = Path(
     os.path.expandvars(
