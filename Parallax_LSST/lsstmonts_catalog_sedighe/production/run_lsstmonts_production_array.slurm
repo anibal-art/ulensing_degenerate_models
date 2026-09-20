@@ -2,7 +2,7 @@
 #SBATCH --partition=cosmoobs
 #SBATCH --nodes=1
 #SBATCH --ntasks=1
-#SBATCH --cpus-per-task=20
+#SBATCH --cpus-per-task=1
 # #SBATCH --hint=nomultithread
 #SBATCH --mem=120G
 #SBATCH --time=24:00:00
@@ -54,6 +54,32 @@ fi
 
 if [[ ! -f "${RUNNER_PATH}" ]]; then
   echo "ERROR: runner file does not exist: ${RUNNER_PATH}" >&2
+  exit 1
+fi
+
+if [[ -z "${EXPECTED_REPO_COMMIT:-}" ]]; then
+  echo "ERROR: EXPECTED_REPO_COMMIT is not defined." >&2
+  exit 1
+fi
+
+JOB_PROJECT_DIR="$(cd "$(dirname "${RUNNER_PATH}")/.." && pwd)"
+ACTUAL_REPO_COMMIT="$(git -C "${JOB_PROJECT_DIR}" rev-parse HEAD)"
+
+echo "EXPECTED REPO COMMIT: ${EXPECTED_REPO_COMMIT}"
+echo "ACTUAL REPO COMMIT  : ${ACTUAL_REPO_COMMIT}"
+
+if [[ "${ACTUAL_REPO_COMMIT}" != "${EXPECTED_REPO_COMMIT}" ]]; then
+  echo "ERROR: repository commit changed after campaign submission." >&2
+  exit 1
+fi
+
+if ! git -C "${JOB_PROJECT_DIR}" diff --quiet --; then
+  echo "ERROR: tracked unstaged changes exist in the production checkout." >&2
+  exit 1
+fi
+
+if ! git -C "${JOB_PROJECT_DIR}" diff --cached --quiet --; then
+  echo "ERROR: tracked staged changes exist in the production checkout." >&2
   exit 1
 fi
 
@@ -125,12 +151,6 @@ export NUMEXPR_NUM_THREADS=1
 export VECLIB_MAXIMUM_THREADS=1
 export PYTHONUNBUFFERED=1
 
-# Extra defensive multiprocessing settings.
-export SIMFIT_RETRIES="${SIMFIT_RETRIES:-1}"
-export SIMFIT_MP_CONTEXT="${SIMFIT_MP_CONTEXT:-spawn}"
-export SIMFIT_SKIP_MODE="${SIMFIT_SKIP_MODE:-none}"
-export SIMFIT_PROGRESS_EVERY="${SIMFIT_PROGRESS_EVERY:-100}"
-
 # ------------------------------------------------------------
 # CPU binding and local scratch
 # ------------------------------------------------------------
@@ -148,8 +168,6 @@ mkdir -p slurm_logs
 ROW_START_GLOBAL="${ROW_START_GLOBAL:?ROW_START_GLOBAL is required}"
 ROW_STOP_GLOBAL="${ROW_STOP_GLOBAL:?ROW_STOP_GLOBAL is required}"
 CHUNK_SIZE="${CHUNK_SIZE:?CHUNK_SIZE is required}"
-WORKERS="${WORKERS:?WORKERS is required}"
-FORCE_RERUN="${FORCE_RERUN:-0}"
 
 TASK_ID="${SLURM_ARRAY_TASK_ID:-0}"
 
@@ -165,7 +183,7 @@ if (( START >= STOP )); then
   exit 0
 fi
 
-SUFFIX="${RUN_TAG}_rows_${START}_${STOP}_w${WORKERS}"
+CHUNK_NAME="rows_${START}_${STOP}"
 
 # ------------------------------------------------------------
 # Read output root and run-name from config
@@ -173,6 +191,7 @@ SUFFIX="${RUN_TAG}_rows_${START}_${STOP}_w${WORKERS}"
 
 mapfile -t CFG_INFO < <(python - "${CFG_PATH}" <<'PY'
 import json
+import os
 import sys
 from pathlib import Path
 
@@ -180,7 +199,19 @@ cfg_path = Path(sys.argv[1])
 cfg = json.loads(cfg_path.read_text())
 
 paths = cfg.get("paths", {})
-output_root = paths.get("output_root")
+
+output_root_raw = paths.get(
+    "output_root"
+)
+
+output_root = (
+    os.path.expandvars(
+        output_root_raw
+    )
+    if output_root_raw
+    else None
+)
+
 run_name = cfg.get("run_name")
 
 if not output_root:
@@ -196,11 +227,14 @@ PY
 OUTPUT_ROOT="${CFG_INFO[0]}"
 RUN_NAME_BASE="${CFG_INFO[1]}"
 
-RUN_DIR="${OUTPUT_ROOT}/runs/${RUN_NAME_BASE}/${SUFFIX}"
+RUN_BASE="${OUTPUT_ROOT}/runs/${RUN_NAME_BASE}/${RUN_TAG}"
+RUN_DIR="${RUN_BASE}/${CHUNK_NAME}"
+
 LOCK_BASE="${OUTPUT_ROOT}/slurm_locks/${RUN_TAG}"
 DONE_BASE="${OUTPUT_ROOT}/slurm_done/${RUN_TAG}"
-LOCK_DIR="${LOCK_BASE}/rows_${START}_${STOP}.lock"
-DONE_FILE="${DONE_BASE}/rows_${START}_${STOP}.DONE"
+
+LOCK_DIR="${LOCK_BASE}/${CHUNK_NAME}.lock"
+DONE_FILE="${DONE_BASE}/${CHUNK_NAME}.DONE"
 
 mkdir -p "${LOCK_BASE}" "${DONE_BASE}"
 
@@ -209,8 +243,16 @@ mkdir -p "${LOCK_BASE}" "${DONE_BASE}"
 # ------------------------------------------------------------
 
 if [[ -f "${DONE_FILE}" ]]; then
-  echo "DONE marker exists. Skipping chunk: ${DONE_FILE}"
-  exit 0
+  if     grep -Fxq "status=done" "${DONE_FILE}" &&     grep -Fxq "run_tag=${RUN_TAG}" "${DONE_FILE}" &&     grep -Fxq "start=${START}" "${DONE_FILE}" &&     grep -Fxq "stop=${STOP}" "${DONE_FILE}"
+  then
+    echo "Validated DONE marker. Skipping completed chunk:"
+    echo "  ${DONE_FILE}"
+    exit 0
+  fi
+
+  echo "ERROR: DONE marker exists but is incomplete or inconsistent:" >&2
+  echo "  ${DONE_FILE}" >&2
+  exit 1
 fi
 
 if ! mkdir "${LOCK_DIR}" 2>/dev/null; then
@@ -224,20 +266,16 @@ cleanup_lock() {
 }
 trap cleanup_lock EXIT
 
-if [[ -d "${RUN_DIR}" && "${FORCE_RERUN}" != "1" ]]; then
-  echo "ERROR: run directory already exists but DONE marker is absent:" >&2
-  echo "  ${RUN_DIR}" >&2
-  echo "This prevents accidental overwrite/append of a partial chunk." >&2
-  echo "Inspect it. To rerun intentionally, set FORCE_RERUN=1 in submit script." >&2
-  exit 1
+if [[ -d "${RUN_DIR}" ]]; then
+  echo "Partial/existing chunk directory found."
+  echo "The two-fit runner will validate and resume it:"
+  echo "  ${RUN_DIR}"
+else
+  echo "Creating new chunk directory:"
+  echo "  ${RUN_DIR}"
 fi
 
-if [[ -d "${RUN_DIR}" && "${FORCE_RERUN}" == "1" ]]; then
-  TS="$(date -u +%Y%m%dT%H%M%SZ)"
-  BACKUP="${RUN_DIR}.partial_${TS}"
-  echo "FORCE_RERUN=1: moving existing run dir to: ${BACKUP}"
-  mv "${RUN_DIR}" "${BACKUP}"
-fi
+mkdir -p "${RUN_DIR}"
 
 # ------------------------------------------------------------
 # Audit
@@ -251,18 +289,13 @@ echo "SLURM_CPUS_PER_TASK=${SLURM_CPUS_PER_TASK:-NA}"
 echo "SLURM_CPU_BIND=${SLURM_CPU_BIND:-NA}"
 echo "TMPDIR=${TMPDIR}"
 echo "MPLCONFIGDIR=${MPLCONFIGDIR}"
-echo "SIMFIT_RETRIES=${SIMFIT_RETRIES}"
-echo "SIMFIT_MP_CONTEXT=${SIMFIT_MP_CONTEXT}"
-echo "SIMFIT_SKIP_MODE=${SIMFIT_SKIP_MODE}"
-echo "SIMFIT_PROGRESS_EVERY=${SIMFIT_PROGRESS_EVERY}"
 echo "ROW_START_GLOBAL=${ROW_START_GLOBAL}"
 echo "ROW_STOP_GLOBAL=${ROW_STOP_GLOBAL}"
 echo "CHUNK_SIZE=${CHUNK_SIZE}"
 echo "TASK_ID=${TASK_ID}"
 echo "START=${START}"
 echo "STOP=${STOP}"
-echo "WORKERS=${WORKERS}"
-echo "SUFFIX=${SUFFIX}"
+echo "CHUNK_NAME=${CHUNK_NAME}"
 echo "OUTPUT_ROOT=${OUTPUT_ROOT}"
 echo "RUN_NAME_BASE=${RUN_NAME_BASE}"
 echo "RUN_DIR=${RUN_DIR}"
@@ -270,48 +303,20 @@ echo "DONE_FILE=${DONE_FILE}"
 echo "============================================================"
 
 # ------------------------------------------------------------
-# Run
+# Run frozen resumable two-fit chunk
 # ------------------------------------------------------------
 
 srun --cpu-bind=cores -u python -u "${RUNNER_PATH}" \
   --config "${CFG_PATH}" \
-  --catalog-row-start "${START}" \
-  --catalog-row-stop "${STOP}" \
-  --workers "${WORKERS}" \
-  --run-name-suffix "${SUFFIX}"
+  --row-start "${START}" \
+  --row-stop "${STOP}" \
+  --out-dir "${RUN_DIR}"
 
 # ------------------------------------------------------------
-# Archive per-event artifacts after successful runner completion
+# Mark done only after the runner exits successfully
 # ------------------------------------------------------------
 
-ARCHIVER_PATH="$(dirname "${RUNNER_PATH}")/production/archive_chunk_artifacts.py"
-
-if [[ ! -f "${ARCHIVER_PATH}" ]]; then
-  echo "ERROR: archive helper not found: ${ARCHIVER_PATH}" >&2
-  exit 1
-fi
-
-echo "============================================================"
-echo "Chunk artifact archive"
-echo "============================================================"
-echo "ARCHIVER_PATH=${ARCHIVER_PATH}"
-echo "RUN_DIR=${RUN_DIR}"
-echo "START=${START}"
-echo "STOP=${STOP}"
-
-python -u "${ARCHIVER_PATH}" \
-  --run-dir "${RUN_DIR}" \
-  --config "${CFG_PATH}" \
-  --start "${START}" \
-  --stop "${STOP}" \
-  --run-tag "${RUN_TAG}" \
-  --workers "${WORKERS}"
-
-echo "============================================================"
-
-# ------------------------------------------------------------
-# Mark done only after runner + archive verification succeed
-# ------------------------------------------------------------
+DONE_TMP="${DONE_FILE}.tmp.${SLURM_JOB_ID:-manual}.${SLURM_ARRAY_TASK_ID:-0}"
 
 {
   echo "status=done"
@@ -322,9 +327,10 @@ echo "============================================================"
   echo "run_tag=${RUN_TAG}"
   echo "start=${START}"
   echo "stop=${STOP}"
-  echo "workers=${WORKERS}"
   echo "run_dir=${RUN_DIR}"
   echo "finished_utc=$(date -u +%Y-%m-%dT%H:%M:%SZ)"
-} > "${DONE_FILE}"
+} > "${DONE_TMP}"
+
+mv "${DONE_TMP}" "${DONE_FILE}"
 
 echo "DONE: ${DONE_FILE}"
