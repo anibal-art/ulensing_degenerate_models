@@ -586,6 +586,7 @@ if materialization_status_path.is_file():
     allowed_statuses = {
         "materialized",
         "not_detectable",
+        "invalid_catalog_row",
     }
 
     statuses = set(
@@ -784,6 +785,16 @@ if materialization_status_path.is_file():
             (
                 resume_df["status"]
                 == "not_detectable"
+            ).sum()
+        ),
+    )
+
+    print(
+        "invalid catalog rows    =",
+        int(
+            (
+                resume_df["status"]
+                == "invalid_catalog_row"
             ).sum()
         ),
     )
@@ -1460,11 +1471,20 @@ for catalog_row in range(
     if status not in {
         "materialized",
         "not_detectable",
+        "invalid_catalog_row",
     }:
         raise RuntimeError(
             f"catalog_row={catalog_row}: "
             f"unexpected materialization status "
             f"{status!r}"
+        )
+
+    if status == "invalid_catalog_row":
+        print(
+            "[invalid-catalog] "
+            f"row={catalog_row} "
+            f"reason={result.get('invalid_reason')!r}",
+            flush=True,
         )
 
     record = {
@@ -1557,6 +1577,11 @@ n_not_detectable = sum(
     for row in materialization_records
 )
 
+n_invalid_catalog = sum(
+    row["status"] == "invalid_catalog_row"
+    for row in materialization_records
+)
+
 
 print()
 print("=" * 80)
@@ -1576,6 +1601,11 @@ print(
 print(
     "not detectable         =",
     n_not_detectable,
+)
+
+print(
+    "invalid catalog rows   =",
+    n_invalid_catalog,
 )
 
 print(
