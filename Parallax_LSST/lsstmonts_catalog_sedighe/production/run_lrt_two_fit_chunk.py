@@ -213,6 +213,7 @@ os.environ[
 
 from standalone_materialize import (  # noqa: E402
     materialize_event,
+    preload_catalog_window,
 )
 
 
@@ -872,6 +873,25 @@ loop_start_row = (
     args.row_start
     + len(materialization_records)
 )
+
+# NEW BLOCK: preload the remaining raw catalog window once.
+#
+# materialize_event() still prepares exactly one row at a time. This
+# removes only the repeated full-file skip/read performed by
+# load_raw_catalog() for every catalog row.
+if loop_start_row < args.row_stop:
+    preload_start_time = time.time()
+
+    preload_catalog_window(
+        loop_start_row,
+        args.row_stop,
+    )
+
+    print(
+        "[catalog-cache] preload wall time = "
+        f"{time.time() - preload_start_time:.3f}s",
+        flush=True,
+    )
 
 CHECKPOINT_COLUMNS = [
     "catalog_row",

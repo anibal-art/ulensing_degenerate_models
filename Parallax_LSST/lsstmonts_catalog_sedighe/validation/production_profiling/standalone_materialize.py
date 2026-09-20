@@ -103,6 +103,67 @@ sys.argv = _ORIGINAL_ARGV
 
 _WORKER_INITIALIZED = False
 
+# NEW BLOCK: optional raw-catalog window cache.
+#
+# Production chunks can preload their remaining raw catalog window once.
+# Individual rows are still prepared one at a time, preserving the
+# existing per-event preparation semantics exactly.
+#
+# Direct/CLI use without a preload continues to fall back to the
+# historical one-row load_raw_catalog() path.
+_PRELOADED_RAW_CATALOG = None
+_PRELOADED_ROW_START = None
+_PRELOADED_ROW_STOP = None
+
+
+def preload_catalog_window(row_start, row_stop):
+    """Preload one contiguous raw-catalog window for repeated row access."""
+    global _PRELOADED_RAW_CATALOG
+    global _PRELOADED_ROW_START
+    global _PRELOADED_ROW_STOP
+
+    row_start = int(row_start)
+    row_stop = int(row_stop)
+
+    if row_start < 0:
+        raise ValueError(
+            f"row_start must be >= 0, got {row_start}"
+        )
+
+    if row_stop <= row_start:
+        raise ValueError(
+            "row_stop must be greater than row_start: "
+            f"{row_start}, {row_stop}"
+        )
+
+    expected_rows = row_stop - row_start
+
+    raw = driver.load_raw_catalog(
+        driver.COLUMNS_FILE,
+        driver.DATA_FILE,
+        nrows=expected_rows,
+        catalog_row_start=row_start,
+        catalog_row_stop=row_stop,
+    ).reset_index(drop=True)
+
+    if len(raw) != expected_rows:
+        raise RuntimeError(
+            "Raw catalog preload returned an unexpected number of rows: "
+            f"expected={expected_rows}, got={len(raw)}, "
+            f"window=[{row_start}, {row_stop})"
+        )
+
+    _PRELOADED_RAW_CATALOG = raw
+    _PRELOADED_ROW_START = row_start
+    _PRELOADED_ROW_STOP = row_stop
+
+    print(
+        "[catalog-cache] preloaded raw rows "
+        f"[{row_start}, {row_stop}) "
+        f"n={len(raw)}",
+        flush=True,
+    )
+
 
 def build_worker_config():
     return {
@@ -145,13 +206,42 @@ def build_worker_config():
 
 def load_one_catalog_row(catalog_row):
     """Load exactly one raw catalog row and prepare it -- no fits."""
-    raw = driver.load_raw_catalog(
-        driver.COLUMNS_FILE, driver.DATA_FILE,
-        nrows=1, catalog_row_start=catalog_row, catalog_row_stop=catalog_row + 1,
+    catalog_row = int(catalog_row)
+
+    cache_available = (
+        _PRELOADED_RAW_CATALOG is not None
+        and _PRELOADED_ROW_START is not None
+        and _PRELOADED_ROW_STOP is not None
+        and _PRELOADED_ROW_START <= catalog_row < _PRELOADED_ROW_STOP
     )
+
+    if cache_available:
+        local_index = (
+            catalog_row
+            - _PRELOADED_ROW_START
+        )
+
+        raw = (
+            _PRELOADED_RAW_CATALOG
+            .iloc[[local_index]]
+            .copy()
+            .reset_index(drop=True)
+        )
+    else:
+        raw = driver.load_raw_catalog(
+            driver.COLUMNS_FILE,
+            driver.DATA_FILE,
+            nrows=1,
+            catalog_row_start=catalog_row,
+            catalog_row_stop=catalog_row + 1,
+        )
+
     prepared, invalid = driver.prepare_catalog(
-        raw, max_base_events=1, catalog_row_offset=catalog_row,
+        raw,
+        max_base_events=1,
+        catalog_row_offset=catalog_row,
     )
+
     return prepared, invalid
 
 
