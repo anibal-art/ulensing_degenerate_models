@@ -40,7 +40,12 @@ from contextlib import contextmanager
 import numpy as np
 
 from run_one_fit_full import run_one_fit_full
-from final_policy import (
+# NEW BLOCK: lightweight fit diagnostics.
+#
+# Do not import final_policy here: that historical module pulls in
+# the obsolete morphology-based fitting stack. These diagnostics are
+# dependency-free and do not alter the frozen two-fit policy.
+from policy_diagnostics import (
     n_photometry_points,
     chi2_dof_sanity_flag,
 )
