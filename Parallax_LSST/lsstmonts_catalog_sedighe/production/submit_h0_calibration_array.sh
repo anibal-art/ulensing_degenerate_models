@@ -15,6 +15,21 @@ RUN_DIR="${PROJECT_DIR}"
 
 OUTPUT_ROOT="/export/storage3/rubin/microlensing/romanrubin/hidden_parallax"
 
+# ============================================================
+# CHE production environment required by LRT_TWO_FIT_V2.json
+# Keep consistent with submit_lsstmonts_production_array.sh.
+# ============================================================
+
+MICROLENSING_ROOT="${MICROLENSING_ROOT:-/home/anibalvarela/microlensing}"
+
+ULENSING_DEGENERATE_MODELS_ROOT="${ULENSING_DEGENERATE_MODELS_ROOT:-/export/storage3/rubin/microlensing/romanrubin/ulensing_degenerate_models}"
+
+PARALLAX_LSST_BASE="${PARALLAX_LSST_BASE:-${ULENSING_DEGENERATE_MODELS_ROOT}/Parallax_LSST}"
+
+ROMAN_RUBIN_DIR="${ROMAN_RUBIN_DIR:-${MICROLENSING_ROOT}/simulation_Rubin/roman_rubin}"
+
+RUBIN_SIM_DATA_DIR="${RUBIN_SIM_DATA_DIR:-/share/storage3/rubin/microlensing/romanrubin/rubin_sim_data}"
+
 RUNNER_SOURCE="${PROJECT_DIR}/production/run_h0_calibration_chunk.py"
 
 CONFIG_SOURCE="${CONFIG_SOURCE:-${PROJECT_DIR}/configs/production/LRT_TWO_FIT_V2.json}"
@@ -170,6 +185,11 @@ CANDIDATE_SPEC="$(
   echo "rank_start_global=${RANK_START_GLOBAL}"
   echo "rank_stop_global=${RANK_STOP_GLOBAL}"
   echo "shard_size=${SHARD_SIZE}"
+  echo "microlensing_root=${MICROLENSING_ROOT}"
+  echo "roman_rubin_dir=${ROMAN_RUBIN_DIR}"
+  echo "ulensing_degenerate_models_root=${ULENSING_DEGENERATE_MODELS_ROOT}"
+  echo "parallax_lsst_base=${PARALLAX_LSST_BASE}"
+  echo "rubin_sim_data_dir=${RUBIN_SIM_DATA_DIR}"
   echo "output_root=${OUTPUT_ROOT}"
 } > "${CANDIDATE_SPEC}"
 
@@ -225,6 +245,12 @@ MANIFEST="${FROZEN_DIR}/manifest.txt"
   echo "partition=${PARTITION}"
   echo "cpus_per_task=${CPUS_PER_TASK}"
   echo "mem_per_task=${MEM_PER_TASK}"
+  echo "microlensing_root=${MICROLENSING_ROOT}"
+  echo "roman_rubin_dir=${ROMAN_RUBIN_DIR}"
+  echo "ulensing_degenerate_models_root=${ULENSING_DEGENERATE_MODELS_ROOT}"
+  echo "parallax_lsst_base=${PARALLAX_LSST_BASE}"
+  echo "rubin_sim_data_dir=${RUBIN_SIM_DATA_DIR}"
+  echo "output_root=${OUTPUT_ROOT}"
   echo "config_sha256=$(awk '{print $1}' "${CFG_PATH}.SHA256")"
 } > "${MANIFEST}"
 
@@ -256,7 +282,7 @@ sbatch \
   --array="0-${ARRAY_MAX}%${MAX_CONCURRENT}" \
   --cpus-per-task="${CPUS_PER_TASK}" \
   --mem="${MEM_PER_TASK}" \
-  --export=ALL,CFG_PATH="${CFG_PATH}",RUNNER_PATH="${RUNNER_SOURCE}",RUN_TAG="${RUN_TAG}",N_CANDIDATES="${N_CANDIDATES}",RANK_START_GLOBAL="${RANK_START_GLOBAL}",RANK_STOP_GLOBAL="${RANK_STOP_GLOBAL}",SHARD_SIZE="${SHARD_SIZE}",SEED="${SEED}",EXPECTED_REPO_COMMIT="${EXPECTED_REPO_COMMIT}" \
+  --export=ALL,CFG_PATH="${CFG_PATH}",RUNNER_PATH="${RUNNER_SOURCE}",RUN_TAG="${RUN_TAG}",N_CANDIDATES="${N_CANDIDATES}",RANK_START_GLOBAL="${RANK_START_GLOBAL}",RANK_STOP_GLOBAL="${RANK_STOP_GLOBAL}",SHARD_SIZE="${SHARD_SIZE}",SEED="${SEED}",EXPECTED_REPO_COMMIT="${EXPECTED_REPO_COMMIT}",MICROLENSING_ROOT="${MICROLENSING_ROOT}",ULENSING_DEGENERATE_MODELS_ROOT="${ULENSING_DEGENERATE_MODELS_ROOT}",PARALLAX_LSST_BASE="${PARALLAX_LSST_BASE}",ROMAN_RUBIN_DIR="${ROMAN_RUBIN_DIR}",RUBIN_SIM_DATA_DIR="${RUBIN_SIM_DATA_DIR}",OUTPUT_ROOT="${OUTPUT_ROOT}" \
   "${SLURM_SCRIPT}"
 
 
