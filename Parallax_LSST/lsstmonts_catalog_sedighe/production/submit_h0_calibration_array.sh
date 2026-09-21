@@ -99,14 +99,7 @@ fi
 
 N_RANKS=$(( RANK_STOP_GLOBAL - RANK_START_GLOBAL ))
 
-N_CHUNKS=$(
-  (
-    N_RANKS
-    + SHARD_SIZE
-    - 1
-  )
-  / SHARD_SIZE
-)
+N_CHUNKS=$(( (N_RANKS + SHARD_SIZE - 1) / SHARD_SIZE ))
 
 ARRAY_MAX=$(( N_CHUNKS - 1 ))
 
