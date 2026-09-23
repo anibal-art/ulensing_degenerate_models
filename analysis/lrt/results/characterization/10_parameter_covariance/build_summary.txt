@@ -1,0 +1,80 @@
+rows = 333653
+columns = 180
+
+LRT regions:
+lrt_region_primary
+detected_alpha_1e-3    229921
+positive               100754
+negative                 2978
+Name: count, dtype: int64
+
+H0 covariance finite:
+h0_cov_finite
+True    333653
+Name: count, dtype: int64
+
+H0 covariance positive definite:
+h0_cov_positive_definite
+True     259214
+False     74439
+Name: count, dtype: int64
+
+H0 max |correlation|:
+count    333340.000000
+mean          0.959283
+std           0.089198
+min           0.056849
+50%           0.996339
+90%           1.000000
+95%           1.000000
+99%           1.000000
+max           9.315555
+Name: h0_max_abs_corr, dtype: float64
+
+H0 covariance condition number:
+count    2.592140e+05
+mean     6.702999e+45
+std      1.196663e+48
+min      7.717670e+00
+50%      5.900034e+06
+90%      9.603334e+41
+95%      5.234350e+43
+99%      9.276365e+45
+max      5.925109e+50
+Name: h0_cov_condition_number, dtype: float64
+
+H1 covariance finite:
+h1_cov_finite
+True    333653
+Name: count, dtype: int64
+
+H1 covariance positive definite:
+h1_cov_positive_definite
+True     330046
+False      3607
+Name: count, dtype: int64
+
+H1 max |correlation|:
+count    333642.000000
+mean          0.969117
+std           0.124333
+min           0.569574
+50%           0.986656
+90%           0.999417
+95%           0.999826
+99%           0.999995
+max          68.213610
+Name: h1_max_abs_corr, dtype: float64
+
+H1 covariance condition number:
+count    3.300460e+05
+mean     3.209467e+18
+std      6.301745e+20
+min      4.997582e+02
+50%      1.783567e+08
+90%      2.610782e+10
+95%      2.045357e+11
+99%      2.241129e+13
+max      1.848604e+23
+Name: h1_cov_condition_number, dtype: float64
+

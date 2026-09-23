@@ -1,0 +1,6 @@
+rows=330668
+threshold_alpha_1e-3=13.1598201148009
+parallax_detected=229921
+confused_fspl_no_parallax=100747
+finite_source_dominated=375
+distance_order_DL_lt_DS=330668
