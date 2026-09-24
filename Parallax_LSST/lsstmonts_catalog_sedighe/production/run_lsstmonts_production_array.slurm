@@ -63,23 +63,111 @@ if [[ -z "${EXPECTED_REPO_COMMIT:-}" ]]; then
 fi
 
 JOB_PROJECT_DIR="$(cd "$(dirname "${RUNNER_PATH}")/.." && pwd)"
-ACTUAL_REPO_COMMIT="$(git -C "${JOB_PROJECT_DIR}" rev-parse HEAD)"
+
+# Compute nodes do not necessarily provide the git executable.
+# Resolve the current repository HEAD directly from .git metadata.
+# The submit script already verifies that the tracked checkout is clean
+# before the campaign is submitted.
+ACTUAL_REPO_COMMIT="$(
+  python - "${JOB_PROJECT_DIR}" <<'PY_HEAD'
+import sys
+from pathlib import Path
+
+start = Path(sys.argv[1]).resolve()
+
+git_marker = None
+repo_root = None
+
+for candidate in (start, *start.parents):
+    marker = candidate / ".git"
+    if marker.exists():
+        git_marker = marker
+        repo_root = candidate
+        break
+
+if git_marker is None:
+    raise SystemExit(
+        f"ERROR: could not find .git metadata above {start}"
+    )
+
+if git_marker.is_dir():
+    git_dir = git_marker
+else:
+    text = git_marker.read_text().strip()
+
+    prefix = "gitdir:"
+    if not text.startswith(prefix):
+        raise SystemExit(
+            f"ERROR: unsupported .git file contents: {git_marker}"
+        )
+
+    git_dir_raw = text[len(prefix):].strip()
+    git_dir = Path(git_dir_raw)
+
+    if not git_dir.is_absolute():
+        git_dir = (repo_root / git_dir).resolve()
+
+head_text = (git_dir / "HEAD").read_text().strip()
+
+if head_text.startswith("ref:"):
+    ref_name = head_text[4:].strip()
+    ref_path = git_dir / ref_name
+
+    if ref_path.is_file():
+        commit = ref_path.read_text().strip()
+    else:
+        packed_refs = git_dir / "packed-refs"
+
+        if not packed_refs.is_file():
+            raise SystemExit(
+                f"ERROR: ref {ref_name} was not found"
+            )
+
+        commit = None
+
+        for line in packed_refs.read_text().splitlines():
+            line = line.strip()
+
+            if (
+                not line
+                or line.startswith("#")
+                or line.startswith("^")
+            ):
+                continue
+
+            sha, name = line.split(" ", 1)
+
+            if name == ref_name:
+                commit = sha
+                break
+
+        if commit is None:
+            raise SystemExit(
+                f"ERROR: ref {ref_name} was not found in packed-refs"
+            )
+else:
+    commit = head_text
+
+if (
+    len(commit) not in (40, 64)
+    or any(
+        char not in "0123456789abcdefABCDEF"
+        for char in commit
+    )
+):
+    raise SystemExit(
+        f"ERROR: invalid commit id resolved from .git: {commit!r}"
+    )
+
+print(commit)
+PY_HEAD
+)"
 
 echo "EXPECTED REPO COMMIT: ${EXPECTED_REPO_COMMIT}"
 echo "ACTUAL REPO COMMIT  : ${ACTUAL_REPO_COMMIT}"
 
 if [[ "${ACTUAL_REPO_COMMIT}" != "${EXPECTED_REPO_COMMIT}" ]]; then
   echo "ERROR: repository commit changed after campaign submission." >&2
-  exit 1
-fi
-
-if ! git -C "${JOB_PROJECT_DIR}" diff --quiet --; then
-  echo "ERROR: tracked unstaged changes exist in the production checkout." >&2
-  exit 1
-fi
-
-if ! git -C "${JOB_PROJECT_DIR}" diff --cached --quiet --; then
-  echo "ERROR: tracked staged changes exist in the production checkout." >&2
   exit 1
 fi
 

@@ -45,6 +45,11 @@ MAX_CONCURRENT="${MAX_CONCURRENT:-5}"
 # in run_lsstmonts_production_array.slurm.
 CPUS_PER_TASK="${CPUS_PER_TASK:-1}"
 
+# SLURM partition(s). A comma-separated list is allowed, e.g.
+# cosmoobs,milliways-int. Command-line sbatch options override
+# the fixed #SBATCH partition in the .slurm file.
+PARTITION="${PARTITION:-cosmoobs}"
+
 # Leave empty to keep the memory value defined in the .slurm file.
 # Examples: 4G, 20G, 80G.
 MEM_PER_TASK="${MEM_PER_TASK:-}"
@@ -211,6 +216,7 @@ SUBMISSION_LOG="${FROZEN_DIR}/submissions.log"
   echo "row_stop_global=${ROW_STOP_GLOBAL}"
   echo "chunk_size=${CHUNK_SIZE}"
   echo "array=0-${ARRAY_MAX}%${MAX_CONCURRENT}"
+  echo "partition=${PARTITION}"
   echo "config_sha256=$(awk '{print $1}' "${CFG_PATH}.SHA256")"
   echo "---"
 } >> "${SUBMISSION_LOG}"
@@ -231,6 +237,7 @@ N_ROWS           = ${N_ROWS}
 N_CHUNKS         = ${N_CHUNKS}
 ARRAY            = 0-${ARRAY_MAX}%${MAX_CONCURRENT}
 MAX_CONCURRENT   = ${MAX_CONCURRENT}
+PARTITION        = ${PARTITION}
 CPUS/task        = ${CPUS_PER_TASK}
 MEM/task         = ${MEM_PER_TASK:-SLURM default}
 DEPENDENCY       = ${DEPENDENCY:-none}
@@ -241,6 +248,7 @@ INFO
 cd "${RUN_DIR}"
 
 SBATCH_ARGS=(
+  --partition="${PARTITION}"
   --array="0-${ARRAY_MAX}%${MAX_CONCURRENT}"
   --cpus-per-task="${CPUS_PER_TASK}"
 )

@@ -213,6 +213,7 @@ os.environ[
 
 from standalone_materialize import (  # noqa: E402
     materialize_event,
+    preload_catalog_window,
 )
 
 
@@ -586,6 +587,7 @@ if materialization_status_path.is_file():
     allowed_statuses = {
         "materialized",
         "not_detectable",
+        "invalid_catalog_row",
     }
 
     statuses = set(
@@ -789,6 +791,16 @@ if materialization_status_path.is_file():
     )
 
     print(
+        "invalid catalog rows    =",
+        int(
+            (
+                resume_df["status"]
+                == "invalid_catalog_row"
+            ).sum()
+        ),
+    )
+
+    print(
         "next uncheckpointed row =",
         next_uncheckpointed_row,
     )
@@ -861,6 +873,25 @@ loop_start_row = (
     args.row_start
     + len(materialization_records)
 )
+
+# NEW BLOCK: preload the remaining raw catalog window once.
+#
+# materialize_event() still prepares exactly one row at a time. This
+# removes only the repeated full-file skip/read performed by
+# load_raw_catalog() for every catalog row.
+if loop_start_row < args.row_stop:
+    preload_start_time = time.time()
+
+    preload_catalog_window(
+        loop_start_row,
+        args.row_stop,
+    )
+
+    print(
+        "[catalog-cache] preload wall time = "
+        f"{time.time() - preload_start_time:.3f}s",
+        flush=True,
+    )
 
 CHECKPOINT_COLUMNS = [
     "catalog_row",
@@ -1460,11 +1491,20 @@ for catalog_row in range(
     if status not in {
         "materialized",
         "not_detectable",
+        "invalid_catalog_row",
     }:
         raise RuntimeError(
             f"catalog_row={catalog_row}: "
             f"unexpected materialization status "
             f"{status!r}"
+        )
+
+    if status == "invalid_catalog_row":
+        print(
+            "[invalid-catalog] "
+            f"row={catalog_row} "
+            f"reason={result.get('invalid_reason')!r}",
+            flush=True,
         )
 
     record = {
@@ -1557,6 +1597,11 @@ n_not_detectable = sum(
     for row in materialization_records
 )
 
+n_invalid_catalog = sum(
+    row["status"] == "invalid_catalog_row"
+    for row in materialization_records
+)
+
 
 print()
 print("=" * 80)
@@ -1576,6 +1621,11 @@ print(
 print(
     "not detectable         =",
     n_not_detectable,
+)
+
+print(
+    "invalid catalog rows   =",
+    n_invalid_catalog,
 )
 
 print(
