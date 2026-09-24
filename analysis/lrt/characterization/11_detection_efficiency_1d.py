@@ -13,6 +13,26 @@ import numpy as np
 import pandas as pd
 import matplotlib.pyplot as plt
 
+import sys as _paper_sys
+from pathlib import Path as _PaperPath
+
+_PAPER_LRT_DIR = next(
+    parent
+    for parent in _PaperPath(__file__).resolve().parents
+    if parent.name == "lrt"
+)
+_paper_sys.path.insert(
+    0,
+    str(_PAPER_LRT_DIR / "plotting"),
+)
+from paper_style import (
+    apply_paper_style,
+    label_panels,
+    save_pdf_companion,
+)
+
+apply_paper_style()
+
 LRT_ROOT = Path(__file__).resolve().parents[1]
 sys.path.insert(0, str(LRT_ROOT))
 import lrt_common as C
@@ -71,7 +91,7 @@ for var in variables:
     xplot = tab["x_median"].to_numpy()
     y = tab["efficiency"].to_numpy()
     yerr = np.vstack([y-tab["wilson_low"].to_numpy(), tab["wilson_high"].to_numpy()-y])
-    fig, ax = plt.subplots(figsize=(6.8, 4.8))
+    fig, ax = plt.subplots(figsize=(6.8, 4.4))
     ax.errorbar(xplot, y, yerr=yerr, fmt="o-", capsize=3)
     if var in {"true_tE", "true_rho", "true_piE_abs"} and np.all(xplot > 0):
         ax.set_xscale("log")
@@ -79,9 +99,11 @@ for var in variables:
     ax.set_xlabel(var)
     ax.set_ylabel("Calibrated H1 detection efficiency")
     ax.grid(alpha=0.25)
-    fig.tight_layout()
-    fig.savefig(OUT_F / f"{var}.png", dpi=220)
+    fig.savefig(OUT_F / f"{var}.png", dpi=300)
+    save_pdf_companion(fig, OUT_F / f"{var}.png")
     plt.close(fig)
 
 pd.concat(all_rows, ignore_index=True).to_csv(OUT_R / "all_1d_efficiencies.csv", index=False)
 print("Saved results in:", OUT_R)
+
+

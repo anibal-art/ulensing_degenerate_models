@@ -7,6 +7,26 @@ import numpy as np
 import pandas as pd
 import matplotlib.pyplot as plt
 
+import sys as _paper_sys
+from pathlib import Path as _PaperPath
+
+_PAPER_LRT_DIR = next(
+    parent
+    for parent in _PaperPath(__file__).resolve().parents
+    if parent.name == "lrt"
+)
+_paper_sys.path.insert(
+    0,
+    str(_PAPER_LRT_DIR / "plotting"),
+)
+from paper_style import (
+    apply_paper_style,
+    label_panels,
+    save_pdf_companion,
+)
+
+apply_paper_style()
+
 LRT_ROOT = Path(__file__).resolve().parents[1]
 sys.path.insert(0, str(LRT_ROOT))
 import lrt_common as C
@@ -59,7 +79,7 @@ summary = pd.DataFrame(rows)
 summary.to_csv(OUT_R / "parallax_recovery_summary.csv", index=False)
 
 mask = np.isfinite(true_abs) & np.isfinite(fit_abs) & (true_abs > 0) & (fit_abs > 0)
-fig, ax = plt.subplots(figsize=(6.0, 5.6))
+fig, ax = plt.subplots(figsize=(5.8, 4.8))
 hb = ax.hexbin(np.log10(true_abs[mask]), np.log10(fit_abs[mask]), gridsize=70, mincnt=1, bins="log")
 lo = min(np.nanpercentile(np.log10(true_abs[mask]), 0.5), np.nanpercentile(np.log10(fit_abs[mask]), 0.5))
 hi = max(np.nanpercentile(np.log10(true_abs[mask]), 99.5), np.nanpercentile(np.log10(fit_abs[mask]), 99.5))
@@ -67,8 +87,10 @@ ax.plot([lo, hi], [lo, hi], linestyle="--", linewidth=1.0)
 ax.set_xlabel(r"$\log_{10}|\pi_{E,\rm true}|$")
 ax.set_ylabel(r"$\log_{10}|\pi_{E,\rm fit}|$")
 fig.colorbar(hb, ax=ax, label="log density")
-fig.tight_layout()
-fig.savefig(OUT_F / "piE_amplitude_true_vs_fit.png", dpi=220)
+fig.savefig(OUT_F / "piE_amplitude_true_vs_fit.png", dpi=300)
+save_pdf_companion(fig, OUT_F / "piE_amplitude_true_vs_fit.png")
 plt.close(fig)
 
 print(summary.to_string(index=False))
+
+

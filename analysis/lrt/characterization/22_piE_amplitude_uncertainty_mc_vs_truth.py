@@ -68,6 +68,26 @@ import numpy as np
 import pandas as pd
 import matplotlib.pyplot as plt
 
+import sys as _paper_sys
+from pathlib import Path as _PaperPath
+
+_PAPER_LRT_DIR = next(
+    parent
+    for parent in _PaperPath(__file__).resolve().parents
+    if parent.name == "lrt"
+)
+_paper_sys.path.insert(
+    0,
+    str(_PAPER_LRT_DIR / "plotting"),
+)
+from paper_style import (
+    apply_paper_style,
+    label_panels,
+    save_pdf_companion,
+)
+
+apply_paper_style()
+
 
 # ============================================================
 # Paths
@@ -1029,10 +1049,7 @@ def main():
     # ========================================================
 
     fig, ax = plt.subplots(
-        figsize=(
-            7.7,
-            5.5,
-        )
+        figsize=(6.8, 4.4)
     )
 
     for class_name in [
@@ -1157,25 +1174,22 @@ def main():
         )
     )
 
-    ax.set_title(
-        "Monte-Carlo uncertainty of the parallax amplitude"
-    )
 
     ax.grid(
         alpha=0.25,
     )
 
     ax.legend(
-        fontsize=9,
+        fontsize=13,
     )
 
-    fig.tight_layout()
 
     fig.savefig(
         FIGURE,
-        dpi=220,
+        dpi=300,
         bbox_inches="tight",
     )
+    save_pdf_companion(fig, FIGURE)
 
     # ========================================================
     # Final output
@@ -1201,3 +1215,5 @@ def main():
 
 if __name__ == "__main__":
     main()
+
+

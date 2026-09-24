@@ -13,6 +13,8 @@
 \usepackage{enumitem}
 \usepackage{microtype}
 \usepackage{placeins}
+\usepackage{array}
+\usepackage{ragged2e}
 
 \hypersetup{
     colorlinks=true,
@@ -30,56 +32,122 @@
 \newcommand{\rhoFS}{\rho}
 \newcommand{\Hnull}{H_0}
 \newcommand{\Halt}{H_1}
+\newcommand{\statusbox}[2]{%
+  \par\medskip
+  \noindent\colorbox{gray!10}{%
+    \parbox{0.96\linewidth}{\textbf{#1}\quad #2}%
+  }%
+  \par\medskip
+}
+\newcommand{\analysisfigure}[4][0.86]{%
+  \IfFileExists{#2}{%
+    \begin{figure}[H]
+      \centering
+      \includegraphics[width=#1\linewidth]{#2}
+      \caption{#3}
+      \label{#4}
+    \end{figure}
+  }{}%
+}
+\newcommand{\analysisfigurepair}[7][0.48]{%
+  \begin{figure}[H]
+    \centering
+    \IfFileExists{#2}{%
+      \begin{subfigure}[t]{#1\linewidth}
+        \centering
+        \includegraphics[width=\linewidth]{#2}
+        \caption{#3}
+      \end{subfigure}%
+    }{}%
+    \hfill
+    \IfFileExists{#4}{%
+      \begin{subfigure}[t]{#1\linewidth}
+        \centering
+        \includegraphics[width=\linewidth]{#4}
+        \caption{#5}
+      \end{subfigure}%
+    }{}%
+    \caption{#6}
+    \label{#7}
+  \end{figure}
+}
+\setcounter{tocdepth}{2}
 
-\title{Empirical Calibration and Characterization of the Annual-Parallax LRT\\
-for LSST Microlensing Events}
-\author{Roman--Rubin hidden-parallax analysis}
-\date{\today}
+\title{Annual-parallax detectability in LSST microlensing\\
+\large Empirical LRT calibration and current characterization}
+\author{Roman--Rubin hidden-parallax analysis\\\small Coauthor analysis note}
+\date{23 September 2026}
 
 \begin{document}
 
 \maketitle
 
 \begin{abstract}
-We study the detectability of annual microlensing parallax in LSST-only finite-source point-lens
-(FSPL) light curves using a likelihood-ratio statistic based on the difference in best-fit
-$\chi^2$ between a no-parallax model and a parallax model. The analysis uses two dedicated
-Monte Carlo populations: an $\Halt$ population generated with annual parallax and an $\Hnull$
-population generated without parallax. The $\Hnull$ sample is used to calibrate the null
-distribution empirically, while the $\Halt$ sample is used to measure the conditional detection
-efficiency and to characterize the events for which parallax is or is not distinguishable.
-This document records the statistical hypotheses, simulation and selection pipeline, fitting
-policy, calibration tests, diagnostics, and the figure-by-figure interpretation of the current
-analysis products.
+We study the intrinsic detectability of annual microlensing parallax in LSST-only
+finite-source point-lens (FSPL) light curves using a likelihood-ratio statistic based on the
+difference in best-fit $\chi^2$ between a no-parallax model and a parallax model.  The
+experiment is deliberately idealized: the simulated photometric noise model is known,
+nonlinear fits are truth-initialized, catalog-based blending is included in the materialized
+light curves, and no unmodeled instrumental or astrophysical systematics are injected.  The
+goal is therefore to isolate the information content of the sampled light curves from the
+separate problem of global parameter-search performance on real data.
+
+A dedicated $\Hnull$ population is used to calibrate the null distribution empirically, and
+an $\Halt$ population is used to measure conditional parallax-detection efficiency after the
+pre-fit microlensing detectability selection.  Under the current frozen two-fit policy, the
+primary $\alpha=10^{-3}$ threshold is $\widehat c_{10^{-3}}=13.1598$ and the corresponding
+population-averaged conditional power is $0.6891$.  These values describe the current frozen
+procedure and are not yet treated as final paper numbers: the remaining high-priority checks
+are the exact nesting/warm-start construction, the approximately global offset of the null
+distribution from $\chi^2_2$, the behavior of the weakly constrained finite-source parameter,
+and the stability of the null false-positive rate in physical event variables.
+
+The present characterization already gives a robust qualitative picture.  Detectability is
+controlled strongly by event timescale and true parallax amplitude; weak-parallax events show
+a positive-definite amplitude bias while the signed North/East components remain nearly
+unbiased; and the component covariance is conservative in both one and two dimensions.  This
+note records the current results, their reproducible repository paths, and the specific
+validation work required before a paper freeze.
 \end{abstract}
 
 \tableofcontents
 \clearpage
 
 % ============================================================
-\section{Scientific question}
+\section{Study scope and scientific question}
 % ============================================================
 
-The goal is to determine when annual parallax is distinguishable in an LSST microlensing
-light curve after the event has already passed the approved pre-fit detectability selection.
-The central statistical question is therefore not whether an event is detectable as
-microlensing, but whether the data favor a finite-source model with annual parallax over the
-corresponding finite-source model without annual parallax.
+The goal is to determine when annual parallax is \emph{intrinsically distinguishable} in an
+LSST microlensing light curve after the event has already passed the approved pre-fit
+microlensing detectability selection.  The central question is not whether an event is
+detectable as microlensing, but whether the sampled light curve contains enough information
+to distinguish an FSPL model with annual parallax from the corresponding FSPL model without
+annual parallax.
 
-The primary quantity is
+The scope is intentionally narrower than an end-to-end real-data detection pipeline.  We
+assume known Gaussian photometric errors, use truth-initialized nonlinear fits to reduce the
+impact of global search failures, include the catalog blending prescription used by the
+simulation, and do not inject unmodeled systematics or correlated noise.  Truth initialization
+is therefore a design choice: it is intended to separate the statistical information question
+from the optimization-search question.
+
+The primary statistic is
 \begin{equation}
     T \equiv \dchi
     =
     \chi^2_{\Hnull}
     -
-    \chi^2_{\Halt},
+    \chi^2_{\Halt}.
 \end{equation}
-where both $\chi^2$ values are the final objective values returned by the frozen production
-fitting policy.
+For exact global minima of nested models one must have $T\ge0$.  The current two-fit production
+retains a small negative tail because the independently optimized $\Halt$ fit is not explicitly
+anchored to the settled $\Hnull$ optimum.  Those events are treated as numerical nesting
+violations, not as physical evidence against the larger model.
 
-For perfectly optimized nested models one expects $T\ge 0$. Negative values are therefore not
-interpreted as physical evidence against the larger model; they are treated as numerical
-nesting violations and audited separately.
+\statusbox{Current status.}{The results in this note are a reproducible snapshot of the frozen
+production and characterization.  They are suitable for coauthor discussion, but the quoted
+threshold and power remain provisional until the nesting/warm-start and null-scale checks in
+Section~\ref{sec:open_checks} are completed.}
 
 % ============================================================
 \section{Hypotheses and microlensing models}
@@ -163,6 +231,32 @@ pre-selection, and numerical optimization. We therefore do not assume that Wilks
 exact. The final calibration is empirical.
 
 % ============================================================
+\section{Observed LRT distribution in the parallax-generated population}
+\label{sec:h1_lrt_distribution}
+% ============================================================
+
+Before introducing the null calibration, it is useful to inspect the statistic itself in the
+$\Halt$-generated population.  The full distribution spans many orders of magnitude in positive
+$T$, while a small numerical tail extends below zero.  The compact production sample contains
+$333\,653$ events, of which $2\,978$ have $T<0$ and 7 have $T=0$.  The median is
+$T\simeq75.1$, so the bulk of the parallax-generated population lies well above zero even though
+a substantial fraction remains in the low-LRT regime relevant to classification.
+
+\analysisfigurepair{../figures/h1_delta_chi2/01_h1_delta_chi2_full_distribution.png}{Full $\Halt$-generated distribution on a logarithmic positive-$T$ axis.  The annotation records the negative and exactly-zero events, which cannot be represented on the logarithmic abscissa.}{../figures/h1_delta_chi2/02_h1_delta_chi2_low_region.png}{Linear view of the low-LRT regime, including the negative numerical tail and the dense concentration of events near $T=0$.}{Distribution of the LRT statistic in the $\Halt$-generated production population.  The two panels show the same sample on complementary scales: the first emphasizes the many-decade positive tail, while the second resolves the region in which confusion and numerical nesting violations occur.}{fig:h1_lrt_distribution}
+
+The low-$T$ panel shows that $177\,725/333\,653=53.27\%$ of the $\Halt$ sample lies below
+$T=100$.  This is not itself a detection statement: the final classification uses the
+empirically calibrated $\Hnull$ threshold, not an arbitrary cut at $T=100$.
+
+The directory \path{analysis/lrt/figures/h1_delta_chi2/} also contains two early diagnostics
+based on the provisional $\chi^2_2$ calibration: the theoretical-p-value histogram and the
+low-LRT histogram with nominal $\chi^2_2$ thresholds.  Those plots were useful during
+exploration but are intentionally not used as current calibration results, because the final
+analysis measures the critical values from the simulated $\Hnull$ population.  The descriptive
+$\Halt$ distribution, low-$T$ view, survival function, and negative-tail sampling diagnostic
+remain valid and are retained in this report.
+
+% ============================================================
 \section{Monte Carlo populations}
 % ============================================================
 
@@ -217,35 +311,87 @@ fraction over all physical microlensing events in the parent Galactic population
 
 % ============================================================
 \section{Frozen production fitting policy}
+\label{sec:policy}
 % ============================================================
 
-The production policy is intentionally minimal and reproducible.
+The production policy is intentionally minimal: every selected event receives exactly one
+$\Hnull$ TRF fit and exactly one $\Halt$ TRF fit.  No differential evolution, global
+multistart, continuation, rescue, or additional projected-null fit is included in the current
+production statistic.
 
-\subsection{$\Halt$-generated events}
+Because this experiment targets intrinsic detectability rather than blind real-data search,
+truth values are used only to initialize nonlinear parameters; all fitted parameters remain
+free.  The exact frozen policy is:
 
-For $\Halt$-generated events, the generating parallax model is fitted once and the nested
-no-parallax model is also fitted according to the frozen production policy. The final LRT uses
-the final $\chi^2$ values selected by that policy.
-
-\subsection{$\Hnull$-generated events}
-
-For $\Hnull$-generated events:
-\begin{enumerate}[leftmargin=2em]
-    \item the $\Hnull$ fit is initialized at the true shared parameters
-    $(t_0,u_0,\te,\rhoFS)$;
-    \item the $\Halt$ fit starts from the exact nested null, with the same shared parameters
-    and $(\pen,\pee)=(0,0)$;
-    \item all fitted parameters remain free during optimization;
-    \item there is one TRF fit for each hypothesis;
-    \item no global multistart, differential evolution, continuation, rescue, or projected
-    fallback is used in this calibration production.
-\end{enumerate}
+\begin{table}[H]
+\centering
+\small
+\begin{tabular}{>{\RaggedRight\arraybackslash}p{2.2cm}
+                >{\RaggedRight\arraybackslash}p{5.5cm}
+                >{\RaggedRight\arraybackslash}p{5.5cm}}
+\toprule
+Generated population & $\Hnull$ fit & $\Halt$ fit\\
+\midrule
+$\Halt$-generated & shared truth $(t_0,u_0,\te,\rho)$; one TRF in
+$\log\te,\log\rho$ coordinates & full generating truth
+$(t_0,u_0,\te,\rho,\pen,\pee)$; one TRF in physical coordinates\\[0.3em]
+$\Hnull$-generated & generating truth $(t_0,u_0,\te,\rho)$; one TRF in
+physical coordinates & same shared generating truth augmented by
+$(\pen,\pee)=(0,0)$; one TRF in physical coordinates\\
+\bottomrule
+\end{tabular}
+\caption{Current frozen two-fit policy.  Both populations use truth-informed starts, but the
+coordinate mode of the $\Hnull$ fit is not identical between the two generated populations.}
+\end{table}
 
 The covariance matrices stored in the compact exports are expressed in physical parameter
-coordinates. The $\Hnull$ covariance order is
-$(t_0,u_0,\te,\rhoFS)$ and the $\Halt$ covariance order is
-$(t_0,u_0,\te,\rhoFS,\pen,\pee)$.
+coordinates.  The $\Hnull$ covariance order is $(t_0,u_0,\te,\rho)$ and the $\Halt$ order is
+$(t_0,u_0,\te,\rho,\pen,\pee)$.
 
+\subsection{Production bounds}
+
+The current production uses the truth-independent \texttt{production\_candidate} fit domain.
+The bounds are
+\begin{table}[H]
+\centering
+\begin{tabular}{lll}
+\toprule
+parameter & production bound & construction\\
+\midrule
+$t_0$ & $[t_{\min}^{\rm obs},t_{\max}^{\rm obs}]$ & data-driven, zero extra margin\\
+$u_0$ & $[-10,10]$ & global fixed bound\\
+$\te$ & $[0.1,5\times10^5]\,$d & global fixed bound\\
+$\rho$ & $[10^{-7},10]$ & global fixed bound\\
+$\pen$ & $[-40,40]$ & global fixed bound, $\Halt$ only\\
+$\pee$ & $[-40,40]$ & global fixed bound, $\Halt$ only\\
+\bottomrule
+\end{tabular}
+\caption{Frozen production bounds.  They are independent of the injected parameters of the
+individual event.}
+\end{table}
+
+This point is important because an earlier development configuration used bounds tied to the
+injected truth.  A dedicated bounds audit showed that those event-dependent bounds could
+artificially raise $\chi^2_{\Hnull}$ and inflate the LRT.  The current production campaign was
+therefore run with the broad truth-independent domain above.
+
+\subsection{Known nesting limitation of the current statistic}
+
+The two models are mathematically nested, but the current implementation does not force the
+settled $\Hnull$ optimum to be an available $\Halt$ solution.  In particular, for
+$\Hnull$-generated events the $\Halt$ fit starts from the generating truth with
+$(\pen,\pee)=(0,0)$, not from $(\widehat{\bm\theta}_{0},0,0)$.  A local optimizer can therefore
+return $\chi^2_{\Halt}>\chi^2_{\Hnull}$ even though the exact nested problem cannot.
+
+The planned consistency check is to add the embedded settled-null point
+\begin{equation}
+    (\widehat{\bm\theta}_{0},\pen=0,\pee=0)
+\end{equation}
+as an explicit $\Halt$ candidate in \emph{both} generated populations and define the final
+$\Halt$ objective as the minimum over the current truth-start result and this nested candidate.
+This requires refitting but not re-simulation.  Until that check is complete, negative $T$
+values are retained and reported as a property of the current frozen procedure rather than
+silently clipped.
 % ============================================================
 \section{Empirical null calibration}
 % ============================================================
@@ -272,14 +418,41 @@ $10^{-3}$        & 13.816 & 13.160 & 0.000741\\
 $10^{-4}$        & 18.421 & 17.867 & 0.000077\\
 \bottomrule
 \end{tabular}
-\caption{Asymptotic and empirically calibrated critical values. The Wilks thresholds are
-slightly conservative for the simulated null population.}
+\caption{Asymptotic and empirically calibrated critical values.  The current frozen
+procedure yields empirical thresholds below the nominal $\chi^2_2$ values; the origin of this
+offset is treated as an open validation item rather than a physical conclusion.}
 \end{table}
 
 The empirical null distribution is therefore close to, but not identical to, $\chi^2_2$.
 The production analysis uses empirical calibration rather than relying solely on the
 asymptotic approximation.
 
+
+\analysisfigurepair{../figures/lrt_validation/01_h0_survival_vs_chi2/h0_survival_vs_chi2.png}{Empirical $\Hnull$ survival function compared with the nominal $\chi^2_2$ survival curve.}{../figures/lrt_validation/01_h0_survival_vs_chi2/h0_survival_ratio.png}{Ratio of empirical to $\chi^2_2$ survival.  The ratio is below unity through most of the calibrated range and becomes noisy only in the extreme tail where few null events remain.}{Empirical null calibration against the Wilks reference.  The simulated null is close to $\chi^2_2$ but has a systematically thinner tail over the range relevant to the adopted thresholds.}{fig:h0_survival_wilks}
+
+The survival comparison makes the direction of the offset explicit: at a fixed candidate
+threshold, the empirical $\Hnull$ tail is generally smaller than the nominal $\chi^2_2$ tail.
+The increasing jaggedness above roughly $T\sim15$--20 is expected from finite null-sample counts
+and is quantified independently by the bootstrap analysis below.
+
+\subsection{Observed offset from the Wilks reference}
+
+The empirical thresholds are systematically below the nominal $\chi^2_2$ values.  The ratios
+\begin{equation}
+  \widehat c_\alpha/c_{\alpha,\chi^2_2}
+  \simeq
+  (0.958,\,0.971,\,0.952,\,0.970)
+\end{equation}
+for $\alpha=(0.05,0.01,10^{-3},10^{-4})$ are suggestive of an approximately global scale
+factor near $0.96$.  The current report does \emph{not} interpret this offset as a physical
+property of microlensing.  Two concrete explanations remain to be separated: a global mismatch
+between injected noise and the error bars used in fitting, and a downward bias of the LRT from
+suboptimization of the larger model.
+
+The first check is the $\Hnull$-generated distribution of
+$\chi^2_{\Hnull}/(N-k_0)$; the second is to repeat the null calibration after enforcing the
+nested $\Hnull\subset\Halt$ construction described in Section~\ref{sec:policy}.  The final paper
+should describe the departure from Wilks only after those checks.
 % ============================================================
 \section{Bootstrap uncertainty of the calibrated thresholds}
 % ============================================================
@@ -309,6 +482,8 @@ $\alpha=10^{-4}$ it contains only about $10$. We therefore adopt
 as the primary working false-positive level for characterization, while retaining the other
 levels for sensitivity tests.
 
+\analysisfigure{../figures/lrt_validation/02_bootstrap_thresholds/bootstrap_critical_values.png}{Bootstrap distributions of the empirically calibrated critical values.  The threshold uncertainty is small at moderate false-positive levels and broadens toward $\alpha=10^{-4}$, where the null tail contains only about ten events.}{fig:bootstrap_thresholds}
+
 % ============================================================
 \section{Cross-validated false-positive rate}
 % ============================================================
@@ -327,6 +502,8 @@ The mean realized false-positive rates are:
 
 This test is important because it verifies the calibration out of sample rather than simply
 checking the same null sample used to define the quantile.
+
+\analysisfigure[0.72]{../figures/lrt_validation/03_crossvalidated_fpr/crossvalidated_fpr.png}{Held-out false-positive rates obtained by estimating the threshold on calibration folds and evaluating it on disjoint test folds.  The realized rates track the nominal $\alpha$ values, showing that the empirical quantile is not merely reproducing the same sample from which it was estimated.}{fig:crossvalidated_fpr}
 
 % ============================================================
 \section{Conditional stability of the null calibration}
@@ -349,8 +526,96 @@ $7/4408=1.59\times10^{-3}$, but the corresponding confidence interval is broad b
 seven false positives occur in that subgroup. The current result therefore does not establish
 a strong sampling-dependent failure of the global threshold.
 
+
+\begin{figure}[p]
+\centering
+\begin{subfigure}[t]{0.31\linewidth}
+\centering
+\includegraphics[width=\linewidth]{../figures/lrt_validation/04_conditional_h0_stability/n_photometry_points.png}
+\caption{Total number of photometric points.}
+\end{subfigure}\hfill
+\begin{subfigure}[t]{0.31\linewidth}
+\centering
+\includegraphics[width=\linewidth]{../figures/lrt_validation/04_conditional_h0_stability/nearest_peak_distance_tE.png}
+\caption{Nearest observation to peak.}
+\end{subfigure}\hfill
+\begin{subfigure}[t]{0.31\linewidth}
+\centering
+\includegraphics[width=\linewidth]{../figures/lrt_validation/04_conditional_h0_stability/poor_peak_coverage.png}
+\caption{Binary poor-peak-coverage flag.}
+\end{subfigure}
+
+\medskip
+\begin{subfigure}[t]{0.31\linewidth}
+\centering
+\includegraphics[width=\linewidth]{../figures/lrt_validation/04_conditional_h0_stability/n_within_0p25_tE.png}
+\caption{Points within $0.25\te$.}
+\end{subfigure}\hfill
+\begin{subfigure}[t]{0.31\linewidth}
+\centering
+\includegraphics[width=\linewidth]{../figures/lrt_validation/04_conditional_h0_stability/n_within_0p5_tE.png}
+\caption{Points within $0.5\te$.}
+\end{subfigure}\hfill
+\begin{subfigure}[t]{0.31\linewidth}
+\centering
+\includegraphics[width=\linewidth]{../figures/lrt_validation/04_conditional_h0_stability/n_within_1_tE.png}
+\caption{Points within $1\te$.}
+\end{subfigure}
+
+\medskip
+\begin{subfigure}[t]{0.31\linewidth}
+\centering
+\includegraphics[width=\linewidth]{../figures/lrt_validation/04_conditional_h0_stability/n_within_2_tE.png}
+\caption{Points within $2\te$.}
+\end{subfigure}\hfill
+\begin{subfigure}[t]{0.31\linewidth}
+\centering
+\includegraphics[width=\linewidth]{../figures/lrt_validation/04_conditional_h0_stability/n_left_within_1_tE.png}
+\caption{Points left of peak within $1\te$.}
+\end{subfigure}\hfill
+\begin{subfigure}[t]{0.31\linewidth}
+\centering
+\includegraphics[width=\linewidth]{../figures/lrt_validation/04_conditional_h0_stability/n_right_within_1_tE.png}
+\caption{Points right of peak within $1\te$.}
+\end{subfigure}
+\caption{Conditional null false-positive rate at the primary threshold as a function of sampling and peak-coverage diagnostics.  The panels show no coherent large departure from the target $10^{-3}$ rate; individual fluctuations are interpreted with their binomial intervals and with the expected multiplicity across many bins.}
+\label{fig:h0_conditional_sampling}
+\end{figure}
+
+Taken together, these panels support the use of a single global threshold with respect to the
+sampling variables tested so far.  They do not, however, address stability in the physical
+parameters of the simulated event; that separate check is described next.
+
+\subsection{Physical-variable stability still to be tested}
+
+The completed conditional-stability study is primarily a sampling audit.  For the paper-level
+calibration we also need the null false-positive rate at the primary threshold as a function of
+physical event variables, in particular $\te$, $u_0$, and the location of $t_0$ relative to the
+seasonal observing window.  This is especially important because the measured $\Halt$ power
+changes strongly with $\te$; a corresponding trend of the null FPR with timescale would distort
+the interpretation of the $(\te,\pi_{\rm E})$ detectability map.
+
+These conditional checks will involve several tens of bins.  Isolated $1$--$2\sigma$ excursions
+from the target false-positive rate are therefore expected from multiple comparisons and will
+not be interpreted as evidence of instability without a coherent trend or a global test.
+
 % ============================================================
-\section{Negative LRT values and numerical nesting violations}
+\section{Scope of the empirical calibration}
+% ============================================================
+
+Cross-validation of the simulated $\Hnull$ sample tests uncertainty in estimating the null
+quantile \emph{within the same data-generating model}.  It does not establish that the same
+numerical threshold can be transferred unchanged to real LSST photometry.  The present
+simulation includes the catalog-based blending prescription used during materialization, but it
+does not represent arbitrary blending-model mismatch, time-correlated noise, underestimated or
+overestimated survey uncertainties, or other instrumental systematics.
+
+Accordingly, $\widehat c_\alpha$ should be read as the calibrated threshold for this idealized
+experiment.  Application to real data would require a separate validation of the photometric
+error model and of residual systematics, potentially including an empirical error
+renormalization or a data-driven null calibration.
+% ============================================================
+\section{Negative LRT values in the current two-fit policy}
 % ============================================================
 
 The compact populations contain:
@@ -410,6 +675,15 @@ procedure actually used in production. Their existence is nevertheless an import
 diagnostic and motivates direct light-curve and trajectory inspection using the saved CHE data
 and fitted parameters, without re-simulation or re-fitting.
 
+\analysisfigurepair{../figures/lrt_validation/05_negative_lrt_diagnostics/h0_poor_peak_coverage_negative_fraction.png}{Under $\Hnull$, the negative-LRT fraction is similar for events with and without the hard poor-peak-coverage flag.}{../figures/lrt_validation/05_negative_lrt_diagnostics/h1_poor_peak_coverage_negative_fraction.png}{Under $\Halt$, poor peak coverage is associated with a substantially larger negative-LRT fraction.}{Dependence of numerical nesting violations on the binary peak-coverage diagnostic.  The contrast between the two generated populations motivates treating sampling as one contributor to the $\Halt$ negative tail, but not as a complete explanation.}{fig:negative_poor_peak}
+
+\analysisfigure[0.76]{../figures/h1_delta_chi2/07_negative_delta_peak_coverage.png}{Continuous peak-coverage comparison for the $\Halt$ population.  Negative-LRT events have a broader distribution of the nearest-observation distance from peak in units of $\te$; the vertical line marks the hard poor-peak-coverage threshold used in the diagnostic flag.}{fig:h1_negative_peak_distance}
+
+The four optimizer-success plots produced by the same validation script are not reproduced
+here because every fitted event in these comparisons reports \texttt{success=True}; the
+scientifically relevant distinction is in continuous optimizer and sampling diagnostics, not
+in a degenerate Boolean panel.
+
 % ============================================================
 \section{False-positive tail under \texorpdfstring{$\Hnull$}{H0}}
 % ============================================================
@@ -465,6 +739,8 @@ The ROC curve is not used to replace the calibrated false-positive threshold. It
 summarize the global separation of the $\Hnull$ and $\Halt$ populations over the complete
 range of possible thresholds.
 
+\analysisfigurepair{../figures/lrt_validation/07_roc_curve/roc_full.png}{Full receiver-operating characteristic using $T$ as the ranking statistic.}{../figures/lrt_validation/07_roc_curve/roc_low_fpr.png}{Low-false-positive-rate zoom, the region most relevant to the adopted calibration levels.}{ROC characterization of the current frozen statistic.  The full curve summarizes global ranking performance, while the low-FPR panel shows the operating regime relevant for $\alpha\lesssim10^{-2}$.  The ROC is descriptive and does not replace the empirically calibrated threshold.}{fig:roc_pair}
+
 % ============================================================
 \section{LRT versus local Wald significance of parallax}
 % ============================================================
@@ -499,6 +775,8 @@ The strong but imperfect correlation shows that the LRT and the local covariance
 significance probe related, but non-identical, aspects of the fitted likelihood surface.
 Events with strong disagreement between these quantities deserve separate characterization.
 
+\analysisfigure[0.78]{../figures/lrt_validation/08_lrt_vs_wald_piE/lrt_vs_wald_piE.png}{Event-level comparison between the LRT statistic and the local two-dimensional Wald significance constructed from the fitted parallax vector and covariance.  The positive correlation is strong but far from one-to-one, confirming that the global fit comparison and the local covariance approximation encode related but non-identical information.}{fig:lrt_vs_wald}
+
 % ============================================================
 \section{Calibrated detection efficiency under \texorpdfstring{$\Halt$}{H1}}
 % ============================================================
@@ -529,6 +807,8 @@ At the primary level,
 
 This is a population-averaged conditional power, not a universal probability for an arbitrary
 microlensing event.
+
+\analysisfigure[0.76]{../figures/h1_delta_chi2/03_h1_delta_chi2_survival_function.png}{$\Halt$ survival function $P(T>c\mid H_1)$ as a function of a candidate threshold $c$.  This is the power curve of the simulated alternative population as the decision threshold is varied; the final operating point is selected by the empirical $\Hnull$ calibration rather than by the $\Halt$ curve itself.}{fig:h1_survival}
 
 % ============================================================
 \section{Event classification for physical characterization}
@@ -625,8 +905,12 @@ in the repository:
 \end{verbatim}
 
 Script 30, which introduced a spline/logistic adjustment of the finite-source
-trend, is intentionally excluded from the confirmed sequence because its
-interpretation was judged insufficiently transparent for the present analysis.
+trend, is intentionally excluded from the confirmed sequence because the finite-source
+control is better posed as a direct matched/reweighted comparison in $(\te,|\pi_{\rm E}|)$.
+The separate directory \path{analysis/lrt/figures/h1_delta_chi2/} predates this numbered
+characterization sequence and contains descriptive diagnostics of the production LRT
+statistic; the subset retained in the report is identified explicitly in
+Section~\ref{sec:h1_lrt_distribution}.
 
 % ============================================================
 \section{Covariance geometry and LRT-region characterization}
@@ -747,6 +1031,10 @@ analysis/lrt/results/characterization/
     14_h1_parallax_area_vs_lrt/
 \end{verbatim}
 
+\analysisfigurepair{../figures/characterization/13_h1_covariance_volume_vs_lrt/h1_covariance_volume_vs_lrt.png}{Dimensionless correlation-volume diagnostic versus LRT.  The non-monotonic trend shows that a small correlation determinant is not uniquely associated with poor parallax detection.}{../figures/characterization/14_h1_parallax_area_vs_lrt/h1_relative_parallax_area_vs_lrt.png}{Relative parallax covariance area versus positive LRT.  The approximate inverse scaling is consistent with the expected improvement of local parallax precision as the likelihood-ratio signal increases.}{Covariance geometry as a function of the LRT statistic.  The full parameter-correlation volume has a non-monotonic relation with $T$, whereas the parallax-specific two-dimensional area shows a much cleaner information scaling.}{fig:covariance_volume_area}
+
+\analysisfigure{../figures/characterization/15_h1_offdiagonal_correlations_vs_lrt/h1_offdiagonal_correlations_vs_lrt.png}{Selected absolute off-diagonal correlations as a function of LRT.  Negative-LRT events are especially enriched in correlations coupling $t_0$ to parallax and other shared event parameters; not every strong correlation is specific to the negative subset.}{fig:offdiag_correlations}
+
 % ============================================================
 \section{H0--H1 displacement and fitted-parameter uncertainties}
 % ============================================================
@@ -811,6 +1099,27 @@ analysis/lrt/results/characterization/
     17_h1_parameters_uncertainties_vs_lrt/
 \end{verbatim}
 
+
+\analysisfigurepair{../figures/characterization/16_h0_h1_parameter_displacement_vs_lrt/h0_h1_parameter_displacement_vs_lrt.png}{Displacement between the final no-parallax and parallax solutions across the LRT statistic.}{../figures/characterization/17_h1_parameters_uncertainties_vs_lrt/h1_parameters_uncertainties_vs_lrt.png}{Formal $\Halt$ parameter uncertainties across LRT.  Negative events are weakly constrained in several shared/parallax directions, while $\rho$ remains poorly constrained throughout the population.}{Model displacement and formal uncertainty diagnostics.  Large $\Hnull$--$\Halt$ displacement is not unique to numerical failures; the more discriminating pattern is the very large uncertainty of several parameters in the negative-LRT subset and the persistent weak identification of $\rho$.}{fig:displacement_uncertainty}
+
+\subsection{Weak constraint on the finite-source parameter}
+
+The fitted finite-source parameter is much less constrained than the parallax components over
+most of the sample.  Representative medians are
+\begin{equation}
+    \sigma_\rho/\rho \sim 90\text{--}110,
+\end{equation}
+and the median $\Hnull$--$\Halt$ displacement in $\log_{10}\rho$ is of order
+$1.5$--$2.5$ dex depending on LRT region.  At the truth level the median
+$\rho/|u_0|$ is only of order $10^{-3}$, so most events are in a regime where finite-source
+structure is intrinsically weak.
+
+This does not by itself invalidate the FSPL LRT: $\rho$ is a shared nuisance parameter in both
+hypotheses.  It does, however, motivate two explicit pre-paper checks.  First, the occupancy of
+the lower and upper $\rho$ bounds should be measured for both hypotheses and across LRT regions,
+because boundary accumulation would alter the regularity assumptions behind a $\chi^2_2$
+reference.  Second, a PSPL ablation on a representative subset can quantify whether leaving a
+nearly unidentified shared $\rho$ free adds material numerical noise to $T$.
 % ============================================================
 \section{Truth-catalog join and positive-LRT population}
 % ============================================================
@@ -871,6 +1180,8 @@ analysis/lrt/results/characterization/19_detection_fraction_vs_true_tE/
 analysis/lrt/figures/characterization/19_detection_fraction_vs_true_tE/
 \end{verbatim}
 
+\analysisfigure{../figures/characterization/19_detection_fraction_vs_true_tE/detection_fraction_vs_true_tE.png}{Conditional parallax-detection fraction in the strictly positive-LRT population as a function of true event timescale.  Detectability rises sharply from short events to $\te\sim100$--$200$ d and then flattens or declines mildly at the longest timescales; sparse extreme bins should not be over-interpreted.}{fig:det_vs_te}
+
 \subsection{Joint dependence on timescale and true parallax amplitude}
 
 Script
@@ -896,6 +1207,8 @@ Repository outputs:
 analysis/lrt/results/characterization/20_detection_fraction_true_tE_piE/
 analysis/lrt/figures/characterization/20_detection_fraction_true_tE_piE/
 \end{verbatim}
+
+\analysisfigure[0.80]{../figures/characterization/20_detection_fraction_true_tE_piE/detection_fraction_true_tE_piE.png}{Conditional parallax-detection fraction in the $(\te,|\pi_{\rm E}|)$ truth plane.  The diagonal transition shows that longer events can reveal smaller parallax amplitudes, while short events require larger $|\pi_{\rm E}|$.}{fig:det_te_pie}
 
 % ============================================================
 \section{Parallax-amplitude recovery and Monte Carlo uncertainty}
@@ -935,6 +1248,8 @@ Repository outputs:
 analysis/lrt/results/characterization/21_piE_amplitude_recovery_vs_truth/
 analysis/lrt/figures/characterization/21_piE_amplitude_recovery_vs_truth/
 \end{verbatim}
+
+\analysisfigure{../figures/characterization/21_piE_amplitude_recovery_vs_truth/piE_amplitude_recovery_vs_truth.png}{Recovery of the fitted parallax amplitude.  Detected events remain close to the one-to-one expectation, whereas confused weak-parallax events show a strong positive amplitude bias caused by taking the norm of noisy Cartesian components.}{fig:pie_amp_recovery}
 
 \subsection{Monte Carlo propagation of the fitted covariance}
 
@@ -992,6 +1307,8 @@ analysis/lrt/figures/characterization/
     piE_amplitude_uncertainty_mc_vs_truth.png
 \end{verbatim}
 
+\analysisfigure{../figures/characterization/22_piE_amplitude_uncertainty_mc_vs_truth/piE_amplitude_uncertainty_mc_vs_truth.png}{Monte Carlo propagation of the fitted $(\pen,\pee)$ covariance into the nonlinear amplitude $|\pi_{\rm E}|$.  Confused events have uncertainties comparable to or larger than the true signal over much of the weak-parallax regime, whereas detected events are typically much more precise.}{fig:pie_amp_mc_unc}
+
 \subsection{Coverage of the propagated amplitude interval}
 
 Script 23 tests whether the true amplitude lies in the propagated central
@@ -1027,6 +1344,9 @@ analysis/lrt/results/characterization/
     23_piE_amplitude_mc_coverage_vs_truth/
     24_confused_piE_mc_interval_outcomes/
 \end{verbatim}
+
+\analysisfigure{../figures/characterization/23_piE_amplitude_mc_coverage_vs_truth/piE_amplitude_mc_coverage_vs_truth.png}{Empirical coverage of the propagated central 68\% interval for $|\pi_{\rm E}|$.  Detected events are close to nominal over most of the range, while confused events strongly undercover.}{fig:pie_amp_coverage}
+\analysisfigure{../figures/characterization/24_confused_piE_mc_interval_outcomes/confused_piE_mc_interval_outcomes.png}{Direction of the amplitude-interval failures for confused events.  At low true parallax the dominant failure is $|\pi_{\rm E,true}|<q_{16}$, demonstrating that the radial distribution is displaced to positive amplitudes rather than merely too narrow.}{fig:pie_amp_outcomes}
 
 % ============================================================
 \section{Truth-vector reconstruction and component-level recovery}
@@ -1112,6 +1432,8 @@ analysis/lrt/figures/characterization/
     piE_component_recovery_vs_truth.png
 \end{verbatim}
 
+\analysisfigure{../figures/characterization/25_piE_component_recovery_vs_truth/piE_component_recovery_vs_truth.png}{Recovery of the signed North and East parallax components, normalized by the total true parallax amplitude.  The component residuals are centered close to zero; the East component is slightly less precise than the North component in both LRT classes.}{fig:pie_component_recovery}
+
 % ============================================================
 \section{Calibration of the parallax-component covariance}
 % ============================================================
@@ -1176,6 +1498,15 @@ parallax covariance is too small; it arises primarily from the nonlinear
 positive-definite transformation to amplitude, together with conditioning on
 the selected LRT populations.
 
+The origin of the component overcoverage remains part of the calibration audit.  In
+particular, it should be compared with the $\chi^2/{\rm dof}$ distribution under $\Hnull$
+and with the covariance rescaling convention before it is interpreted as a physical property
+of the likelihood geometry.
+
+\analysisfigure{../figures/characterization/26_piE_component_uncertainty_vs_truth/piE_component_uncertainty_vs_truth.png}{Formal marginal uncertainties of $\pen$ and $\pee$ relative to the total true parallax amplitude.  Confused events are weakly constrained, while detected events are typically at the $\sim0.1$--$0.25$ fractional scale.}{fig:pie_component_unc}
+\analysisfigure{../figures/characterization/27_piE_component_one_sigma_coverage/piE_component_one_sigma_coverage.png}{Empirical one-sigma coverage of the individual parallax components.  The coverage is generally above the Gaussian 68.27\% reference, indicating conservative marginal covariance estimates.}{fig:pie_component_coverage}
+\analysisfigure{../figures/characterization/28_piE_2d_covariance_coverage_vs_truth/piE_2d_covariance_coverage_vs_truth.png}{Coverage of the full two-dimensional parallax covariance ellipse.  The joint 68\% ellipse also overcovers through most of the populated truth range, confirming that the radial undercoverage is not caused by an underestimated Cartesian covariance.}{fig:pie_2d_coverage}
+
 Repository paths:
 \begin{verbatim}
 analysis/lrt/characterization/
@@ -1235,6 +1566,8 @@ distributions of $\te$ and $|\pi_{\rm E}|$ must be compared across
 $R_{\rm FS}$, because both are already known to be strong determinants of
 parallax detectability.
 
+\analysisfigure{../figures/characterization/29_detection_fraction_vs_finite_source_strength/detection_fraction_vs_finite_source_strength.png}{Raw conditional parallax-detection fraction versus the truth-level finite-source strength $R_{\rm FS}=\rho/|u_0|$.  The relation is modest for $R_{\rm FS}<1$; the apparent rise for source-transit events is based on a small tail and is treated as descriptive until a $({t_E},|\pi_{\rm E}|)$-matched control is performed.}{fig:finite_source_raw}
+
 Confirmed outputs:
 \begin{verbatim}
 analysis/lrt/results/characterization/
@@ -1246,99 +1579,169 @@ analysis/lrt/figures/characterization/
 \end{verbatim}
 
 % ============================================================
-\section{Current characterization conclusions}
+\section{Current scientific conclusions}
 % ============================================================
 
-The confirmed characterization supports the following working conclusions:
+The confirmed analysis supports the following statements under the current idealized,
+truth-initialized two-fit procedure:
 \begin{enumerate}[leftmargin=2em]
-    \item Annual-parallax detectability is controlled strongly by both true
-    event timescale and true parallax amplitude, with a diagonal detection
-    boundary in the $(\te,\pi_{\rm E})$ plane.
+    \item The empirical null distribution is close to, but systematically thinner than, a
+    $\chi^2_2$ reference.  At $\alpha=10^{-3}$ the current empirical threshold is
+    $\widehat c=13.1598$.  The approximately constant threshold ratio relative to Wilks is a
+    diagnostic to be explained, not yet a physical result.
 
-    \item Positive-LRT events below the calibrated threshold are not simply
-    detected events with slightly worse precision.  Their fitted parallax
-    amplitudes can be strongly biased upward at low true $\pi_{\rm E}$ and
-    their propagated radial intervals are very broad.
+    \item At the current primary threshold, the population-averaged conditional power in the
+    selected $\Halt$ sample is $0.6891$.  Restricting only to strictly positive LRT values gives
+    $229\,921$ detected and $100\,747$ confused events, corresponding to a positive-$T$
+    detection fraction of $0.6953$.
 
-    \item The strong low-signal bias is primarily a property of the parallax
-    \emph{amplitude}.  The signed North and East components have median
-    residuals close to zero.
+    \item Annual-parallax detectability depends strongly and jointly on true event timescale and
+    true parallax amplitude.  The $(\te,|\pi_{\rm E}|)$ map shows a clear diagonal transition:
+    short events require larger parallax amplitudes, while long events can reveal smaller
+    amplitudes.
 
-    \item Both the marginal component uncertainties and the full 2D parallax
-    covariance ellipse are conservative relative to the realized component
-    errors.  The poor radial coverage of $|\pi_{\rm E}|$ should therefore not
-    be interpreted as evidence that the Cartesian covariance matrix is too
-    small.
+    \item Confused weak-parallax events show a strong positive bias in the scalar amplitude
+    $|\widehat{\pi}_{\rm E}|$, but the signed North and East component residuals remain centered
+    close to zero.  The amplitude behavior is therefore consistent with the positive-definite
+    norm of noisy Cartesian components rather than a large signed bias in either component.
 
-    \item Negative-LRT events remain a distinct numerical population.  They
-    are associated with poorer sampling and stronger selected degeneracies,
-    especially involving $t_0$ and the parallax components, but no single
-    covariance or optimizer diagnostic explains all of them.
+    \item The marginal component covariance and the full two-dimensional parallax covariance
+    ellipse are conservative relative to realized component errors.  The poor coverage of the
+    central radial interval for $|\pi_{\rm E}|$ should not be interpreted as evidence that the
+    Cartesian covariance is too small.
 
-    \item The first finite-source diagnostic shows only modest variation in
-    parallax-detection fraction for $\rho/|u_0|<1$ and a possible rise for
-    source-transit events.  The latter must be checked against the associated
-    $\te$ and $\pi_{\rm E}$ distributions before assigning a finite-source
-    interpretation.
+    \item Negative LRT values are a numerical feature of the current independent two-fit
+    construction.  They correlate with poorer sampling and stronger selected degeneracies, but
+    the mathematically cleaner solution is to enforce the nested $\Hnull$ point explicitly in
+    the $\Halt$ candidate set rather than to interpret the negative tail physically.
+
+    \item The first finite-source diagnostic shows only modest variation in parallax
+    detectability for $\rho/|u_0|<1$.  The apparent increase for the 375 source-transit events is
+    not yet assigned to finite-source physics because $\te$ and $|\pi_{\rm E}|$ must first be
+    distribution-matched.
 \end{enumerate}
 
 % ============================================================
-\section{Interpretation of the current figure set}
+\section{Practical recommendation for reporting parallax}
+% ============================================================
 
-The current repository figure set was inspected together with the numerical CSV outputs that
-produced it. The automatically generated appendix below contains every current LRT validation
-figure, with a figure-specific caption and interpretation. Several general conclusions emerge.
+For weak or confused events, the central interval $[q_{16},q_{84}]$ of the propagated scalar
+amplitude is not a reliable representation of frequentist coverage.  The preferred primary
+representation is therefore the fitted vector
+\begin{equation}
+    (\pen,\pee)
+\end{equation}
+with its full $2\times2$ covariance ellipse.  If a one-dimensional amplitude summary is needed
+for a non-detection, an upper limit designed specifically for radial coverage is preferable to
+treating the central interval of $|\pi_{\rm E}|$ as a Gaussian-like uncertainty.
+
+% ============================================================
+\section{Open validation items before paper freeze}
+\label{sec:open_checks}
+% ============================================================
+
+The following items are explicit remaining checks rather than unresolved figure
+interpretations.  The existing results remain useful as the baseline against which these tests
+will be compared.
 
 \begin{enumerate}[leftmargin=2em]
-    \item The empirical $H_0$ tail is systematically thinner than the $\chi^2_2$ reference over
-    the scientifically relevant range. Consequently, Wilks thresholds are slightly conservative.
+    \item \textbf{Enforce exact nesting and harmonize the test statistic.}  Add the settled
+    $\Hnull$ optimum embedded at $(\pen,\pee)=(0,0)$ as an explicit $\Halt$ candidate in both
+    generated populations, and use the same coordinate convention for corresponding fits in the
+    two generated samples.  Then recalibrate $\widehat c_\alpha$ and remeasure power.  This
+    needs refits but no new light-curve simulations.
 
-    \item The bootstrap and held-out tests show that the empirical calibration is stable at
-    $\alpha=0.05$, $0.01$, and $10^{-3}$. At $10^{-4}$ the uncertainty is dominated by the fact
-    that only about ten null events populate the relevant tail.
+    \item \textbf{Explain the approximately global offset from Wilks.}  Measure the
+    $\Hnull$-generated distribution of $\chi^2_{\Hnull}/(N-k_0)$ and repeat the null LRT after
+    the nesting fix.  These tests separate a global noise/error-scale effect from systematic
+    suboptimization of $\Halt$.
 
-    \item No strong monotonic dependence of the null false-positive rate on the tested sampling
-    diagnostics is visible. All conditional Wilson intervals are compatible with the global
-    target $\alpha=10^{-3}$. The \texttt{poor\_peak\_coverage=True} subset has a larger point
-    estimate, but only seven false positives and a correspondingly broad interval.
+    \item \textbf{Audit $\rho$ against its production bounds.}  Quantify lower/upper-bound
+    occupancy for $\Hnull$ and $\Halt$ and across LRT regions.  If $\rho$ is effectively
+    unidentified but not boundary-dominated, it is a weak shared nuisance parameter; if it
+    accumulates at a boundary, the regularity assumptions behind a $\chi^2_2$ reference need to
+    be reconsidered.  A small PSPL ablation will test whether free $\rho$ adds material
+    numerical noise to the LRT.
 
-    \item Negative LRT values have different behavior in the two generated populations. Under
-    $H_0$, poor peak coverage produces little change in the negative fraction; the numerical
-    diagnostics instead point toward poorer optimizer optimality. Under $H_1$, poor peak coverage
-    increases the negative-LRT fraction from about $0.8\%$ to about $3.0\%$, demonstrating a
-    strong sampling dependence.
+    \item \textbf{Test physical-variable stability of the null FPR.}  At the primary threshold,
+    measure FPR versus $\te$, $u_0$, and peak epoch relative to the seasonal observing window.
+    This is required before the $(\te,\pi_{\rm E})$ power map is interpreted as free of
+    null-calibration structure.
 
-    \item The optimizer-success flags are constant and equal to \texttt{True} in the current
-    compact production sample. Figures conditioned only on those flags therefore contain a
-    single point and are audit figures rather than scientifically discriminating plots.
+    \item \textbf{Control the finite-source tail non-parametrically.}  Compare the 375
+    $\rho/|u_0|>1$ events with a control population reweighted or matched in
+    $(\te,|\pi_{\rm E}|)$.  The spline/logistic adjustment explored during development is not
+    retained as a confirmed result because the matching question can be answered more
+    transparently without a model-dependent regression.
 
-    \item The ROC curve shows strong population separation, with AUC $=0.8983$. The low-FPR
-    panel is the more relevant operating view because the scientific thresholds lie between
-    $10^{-4}$ and $0.05$.
-
-    \item The LRT and covariance-based Wald statistic are strongly correlated but show broad
-    scatter, especially at low significance. They should therefore not be treated as
-    interchangeable measures of parallax detectability.
+    \item \textbf{Define transfer to real data separately.}  The current empirical threshold
+    calibrates an idealized simulation with known errors and no unmodeled systematics.  A real
+    LSST application will require validation of error normalization, time-correlated residuals,
+    blending mismatch, and other survey systematics rather than direct reuse of the present
+    threshold by assumption.
 \end{enumerate}
 
-For a final paper, the recommended main-text figures are the null survival curve, bootstrap
-critical values, cross-validated FPR, a compact conditional-stability summary, the $H_1$ poor
-peak-coverage negative-LRT diagnostic, the low-FPR ROC panel, and the LRT--Wald comparison.
-The single-category optimizer-success plots are best retained only as reproducibility/audit
-material.
-\clearpage
+\statusbox{Interpretation for coauthors.}{The current numbers are not being hidden or discarded:
+they are the results of a precisely defined frozen experiment.  The items above identify which
+parts must be rechecked before promoting the threshold and power to final paper values.  The
+truth-level detectability trends and the component-level parallax characterization are already
+useful scientific results, while the exact numerical null calibration remains the main
+methodological item to finalize.}
 
 % ============================================================
-\appendix
-\section{Automatically included repository figures}
+\section{Figure set retained in this coauthor note}
 % ============================================================
 
-\IfFileExists{generated/figure_manifest.tex}{
-    \input{generated/figure_manifest.tex}
-}{
-    \noindent
-    \textbf{Figure manifest not found.}
-    Run \texttt{python build\_figure\_manifest.py} from this report directory before compiling.
-}
+The figure selection is intentionally curated rather than generated automatically.  Each
+scientific figure appears once in the body next to its interpretation.  The retained groups
+are:
+\begin{itemize}[leftmargin=2em]
+    \item $\Halt$ LRT distribution: full range, low-$T$ regime, survival function, and
+    continuous peak-coverage diagnostic for the negative tail;
+    \item $\Hnull$ calibration: survival versus $\chi^2_2$, survival ratio, bootstrap critical
+    values, held-out FPR, and all nine completed sampling-stability panels;
+    \item numerical/statistical diagnostics: peak-coverage dependence of negative LRT values,
+    full and low-FPR ROC curves, and LRT versus the local parallax Wald statistic;
+    \item confirmed physical characterization: scripts 13--17 and 19--29.
+\end{itemize}
+
+The two $\Halt$ plots that convert $T$ to provisional theoretical $\chi^2_2$ p-values or draw
+nominal $\chi^2_2$ thresholds are not part of the current result set, because the experiment now
+uses the simulated $\Hnull$ distribution for calibration.  Characterization script/figure 30
+is likewise excluded from the confirmed sequence.  The optimizer-success plots are summarized
+in text rather than shown because they contain only the value \texttt{success=True} for the
+relevant populations.
+
+% ============================================================
+\section{Reproducibility map}
+% ============================================================
+
+The analysis is versioned under the repository root.  The main paths are:
+\begin{longtable}{p{0.48\linewidth} p{0.45\linewidth}}
+\toprule
+Path & Purpose\\
+\midrule
+\endfirsthead
+\toprule
+Path & Purpose\\
+\midrule
+\endhead
+\path{Parallax_LSST/lsstmonts_catalog_sedighe/configs/production/LRT_TWO_FIT_V2.json} & Frozen simulation/materialization and production configuration.\\
+\path{Parallax_LSST/lsstmonts_catalog_sedighe/validation/production_profiling/lrt_fit_policy.py} & Frozen two-fit LRT policy.\\
+\path{Parallax_LSST/lsstmonts_catalog_sedighe/validation/bounds_audit/run_bounds_audit_refit_core.py} & Production bounds and fitting-core implementation.\\
+\path{analysis/lrt/data/h0_empirical_calibration_thresholds_20260921.csv} & Empirical null thresholds.\\
+\path{analysis/lrt/data/h1_lrt_classified_20260921.parquet} & Classified $\Halt$ production table.\\
+\path{analysis/lrt/characterization/} & Confirmed characterization scripts 10--29.\\
+\path{analysis/lrt/results/characterization/} & Numerical characterization outputs.\\
+\path{analysis/lrt/figures/characterization/} & Local characterization figures; generated products rather than required Git artifacts.\\
+\path{analysis/lrt/figures/lrt_validation/} & Null-calibration, cross-validation, ROC, and Wald diagnostic figures.\\
+\path{analysis/lrt/figures/h1_delta_chi2/} & Descriptive $\Halt$ LRT-distribution diagnostics; provisional $\chi^2_2$ p-value/threshold plots in this directory are retained only as development history.\\
+\path{analysis/lrt/report/lrt_analysis_report.tex} & Coauthor analysis report.\\
+\bottomrule
+\end{longtable}
+
+The confirmed characterization sequence ends at script 29.  Script 30, which explored a
+spline/logistic adjustment of finite-source strength, is intentionally excluded from the
+confirmed chain and from the conclusions in this note.
 
 \end{document}

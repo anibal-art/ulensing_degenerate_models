@@ -12,6 +12,26 @@ import numpy as np
 import pandas as pd
 import matplotlib.pyplot as plt
 
+import sys as _paper_sys
+from pathlib import Path as _PaperPath
+
+_PAPER_LRT_DIR = next(
+    parent
+    for parent in _PaperPath(__file__).resolve().parents
+    if parent.name == "lrt"
+)
+_paper_sys.path.insert(
+    0,
+    str(_PAPER_LRT_DIR / "plotting"),
+)
+from paper_style import (
+    apply_paper_style,
+    label_panels,
+    save_pdf_companion,
+)
+
+apply_paper_style()
+
 LRT_ROOT = Path(__file__).resolve().parents[1]
 sys.path.insert(0, str(LRT_ROOT))
 import lrt_common as C
@@ -78,7 +98,7 @@ for xname, yname, logx, logy in pairs:
             })
     pd.DataFrame(rows).to_csv(OUT_R / f"{xname}_vs_{yname}.csv", index=False)
 
-    fig, ax = plt.subplots(figsize=(7.0, 5.6))
+    fig, ax = plt.subplots(figsize=(6.8, 4.4))
     mesh = ax.pcolormesh(xedges, yedges, eff.T, vmin=0, vmax=1, shading="auto")
     if logx:
         ax.set_xscale("log")
@@ -87,8 +107,10 @@ for xname, yname, logx, logy in pairs:
     ax.set_xlabel(xname)
     ax.set_ylabel(yname)
     fig.colorbar(mesh, ax=ax, label="Detection efficiency")
-    fig.tight_layout()
-    fig.savefig(OUT_F / f"{xname}_vs_{yname}.png", dpi=220)
+    fig.savefig(OUT_F / f"{xname}_vs_{yname}.png", dpi=300)
+    save_pdf_companion(fig, OUT_F / f"{xname}_vs_{yname}.png")
     plt.close(fig)
 
 print("Saved maps in:", OUT_F)
+
+

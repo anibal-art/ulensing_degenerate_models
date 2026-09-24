@@ -12,6 +12,26 @@ import numpy as np
 import pandas as pd
 import matplotlib.pyplot as plt
 
+import sys as _paper_sys
+from pathlib import Path as _PaperPath
+
+_PAPER_LRT_DIR = next(
+    parent
+    for parent in _PaperPath(__file__).resolve().parents
+    if parent.name == "lrt"
+)
+_paper_sys.path.insert(
+    0,
+    str(_PAPER_LRT_DIR / "plotting"),
+)
+from paper_style import (
+    apply_paper_style,
+    label_panels,
+    save_pdf_companion,
+)
+
+apply_paper_style()
+
 LRT_ROOT = Path(__file__).resolve().parents[1]
 sys.path.insert(0, str(LRT_ROOT))
 import lrt_common as C
@@ -73,7 +93,7 @@ pd.DataFrame({"catalog_row": df["catalog_row"], "D2_piE_error": D2, "valid_covar
     OUT_R / "coverage_by_event.parquet", index=False
 )
 
-fig, ax = plt.subplots(figsize=(6.0, 5.2))
+fig, ax = plt.subplots(figsize=(5.8, 4.8))
 for cls in ["all", "detected", "missed"]:
     tab = summary[summary["class"] == cls]
     ax.plot(tab["nominal_level"], tab["empirical_coverage"], marker="o", label=cls)
@@ -84,8 +104,10 @@ ax.set_xlabel("Nominal 2D Gaussian coverage")
 ax.set_ylabel("Empirical coverage")
 ax.grid(alpha=0.25)
 ax.legend()
-fig.tight_layout()
-fig.savefig(OUT_F / "coverage_nominal_vs_empirical.png", dpi=220)
+fig.savefig(OUT_F / "coverage_nominal_vs_empirical.png", dpi=300)
+save_pdf_companion(fig, OUT_F / "coverage_nominal_vs_empirical.png")
 plt.close(fig)
 
 print(summary.to_string(index=False))
+
+

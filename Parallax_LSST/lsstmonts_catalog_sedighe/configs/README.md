@@ -11,3 +11,15 @@ Historical development configs under `lrt_history/` document optimizer developme
 
 For a new experiment, copy a reference config rather than editing a frozen benchmark config in place.
 See the main `README.md` for configuration usage and the current LRT workflow.
+
+## Bounds validation
+
+Truth-independent fitting-domain and bounds-convergence configurations are
+stored in:
+
+    validation/bounds_convergence/
+
+See the main project `README.md`, section
+"Fit bounds and initialization reference", for the supported bound
+specifications, initialization modes, and H1 parallax multistart conventions.
+

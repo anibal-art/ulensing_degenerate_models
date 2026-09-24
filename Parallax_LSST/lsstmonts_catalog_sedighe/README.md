@@ -392,3 +392,305 @@ differences across 81 checked scientific numerical summary columns.
 
 
 <!-- END HIDDEN_PARALLAX_LRT_STATUS -->
+
+<!-- BEGIN FIT_CONFIG_REFERENCE -->
+
+## Fit bounds and initialization reference
+
+This section documents the configuration semantics used by the hidden-parallax
+runner. The purpose is to make the fitting domain and initialization choices
+explicit without requiring inspection of the runner source code.
+
+### Where bounds are defined
+
+The configuration contains:
+
+    fit.bounds
+    fit.fits.H0.bounds
+    fit.fits.H1.bounds
+
+`fit.bounds` is the general/default bound configuration used by the runner and
+legacy/single-fit paths.
+
+For the named likelihood-ratio fits, the model-specific bounds are:
+
+    fit.fits.H0.bounds
+    fit.fits.H1.bounds
+
+H0 and H1 should use the same domain for their shared nuisance parameters:
+
+    t0, u0, tE, rho
+
+H1 additionally contains:
+
+    piEN, piEE
+
+For a valid H0/H1 likelihood-ratio test, the H1 parallax domain must contain
+
+    piEN = 0
+    piEE = 0
+
+so that H0 is nested inside H1.
+
+When changing production bounds, keep `fit.bounds` and the corresponding
+H0/H1 definitions consistent unless a validation experiment intentionally
+requires otherwise.
+
+
+### Bound specifications
+
+#### Explicit interval
+
+A two-element list defines a fixed absolute fitting interval.
+
+Example:
+
+    "u0": [-2.0, 2.0]
+
+means
+
+    -2 <= u0 <= 2
+
+Similarly,
+
+    "tE": [0.1, 750.0]
+
+defines a global domain independent of the individual simulated truth.
+
+This is the preferred representation for truth-independent production bounds.
+
+
+#### center_width with explicit center
+
+Example:
+
+    "piEN": {
+        "type": "center_width",
+        "center": 0.0,
+        "half_width": 10.0
+    }
+
+defines
+
+    center - half_width <= parameter <= center + half_width
+
+and therefore gives
+
+    -10 <= piEN <= 10
+
+This representation is useful for symmetric zero-centered parallax bounds.
+
+
+#### center_width without explicit center
+
+Example:
+
+    "t0": {
+        "type": "center_width",
+        "half_width": 30.0
+    }
+
+or
+
+    "u0": {
+        "type": "center_width",
+        "half_width": 1.0
+    }
+
+uses an event-dependent reference value as the center.
+
+In simulations where that reference comes from the generated event, this makes
+the resulting fitting interval dependent on the event truth.
+
+This is scientifically important for likelihood-ratio tests. A truth-dependent
+bound changes the parameter space over which the minimum chi-square is found
+and can therefore bias the LRT statistic.
+
+
+#### relative
+
+Example:
+
+    "tE": {
+        "type": "relative",
+        "frac": 1.0,
+        "lower": 0.1,
+        "upper": 20000.0,
+        "min_width": 0.1
+    }
+
+constructs an interval relative to an event reference value.
+
+For a positive reference value p_ref, the nominal scale is approximately
+
+    p_ref * (1 - frac)  to  p_ref * (1 + frac)
+
+subject to the configured `lower`, `upper`, and `min_width` safeguards.
+
+Thus, with `frac = 1`, the upper scale is approximately
+
+    2 * p_ref
+
+before application of the global safeguards.
+
+If `p_ref` originates from the simulated truth, this bound is also
+truth-dependent.
+
+
+### Scientific rule for the hidden-parallax LRT
+
+The fitting domain and optimizer initialization are different choices.
+
+For the final scientific LRT, the allowed fitting domain must not depend on the
+individual event truth.
+
+The statistic is
+
+    Delta_chi2_LRT = chi2_H0_min - chi2_H1_min
+
+and should compare minima over predefined H0 and H1 model spaces.
+
+Truth-dependent bounds can prevent either model from reaching its actual
+minimum and therefore bias Delta_chi2.
+
+The bounds audit performed for this project showed that the previous
+truth-dependent nuisance-parameter bounds could strongly penalize H0 and
+inflate the inferred LRT statistic.
+
+
+### t0 bounds
+
+A truth-independent t0 domain should preferably be derived from the timestamps
+available to the fit, for example
+
+    t_min <= t0 <= t_max
+
+rather than from
+
+    t0_true +/- constant
+
+Increasing the width of a truth-centered interval does not remove the
+truth dependence.
+
+
+### Initial guesses
+
+The runner accepts
+
+    "initial_guess": "truth"
+
+for controlled validation experiments that deliberately initialize physical
+parameters at their simulated values.
+
+Using truth as an initial guess is conceptually different from using
+truth-dependent bounds:
+
+- an initial guess determines where the optimizer starts;
+- a bound determines which parameter values are allowed in the statistical
+  model.
+
+Truth initialization can therefore be useful for optimizer validation while
+the fitting domain itself remains truth-independent.
+
+
+### Embedded H0 initialization of H1
+
+With
+
+    "h1_initialization": "embedded_H0"
+    "h1_embed_fluxes_from_H0": true
+
+the best H0 solution is embedded into H1 with
+
+    piEN = 0
+    piEE = 0
+
+and the H0 fitted flux solution is reused when requested.
+
+This provides an explicit nested-model starting point for H1.
+
+
+### H1 parallax multistarts
+
+The runner supports two multistart conventions.
+
+#### Absolute parallax starts
+
+Preferred for bounds-sensitivity experiments:
+
+    "piEN_grid_values": [-0.99865, 0.0, 0.99865]
+    "piEE_grid_values": [-1.100548, 0.0, 1.100548]
+
+These are physical parallax values and are independent of the H1 bound width.
+
+Both `piEN_grid_values` and `piEE_grid_values` must be supplied together.
+Every grid value must lie inside the corresponding H1 fitting domain.
+
+When absolute values are supplied, they take precedence over the legacy
+fractional grid.
+
+
+#### Legacy fractional parallax starts
+
+The older configuration uses
+
+    "piE_grid_fractions": [-0.5, 0.0, 0.5]
+
+The physical starting values are obtained by multiplying these fractions by
+the corresponding parallax-bound half-width.
+
+For the previous production bounds
+
+    piEN half-width = 1.9973
+    piEE half-width = 2.201096
+
+this produces
+
+    piEN starts = -0.99865, 0, +0.99865
+    piEE starts = -1.100548, 0, +1.100548
+
+Therefore, changing the parallax bound while retaining
+`piE_grid_fractions` also changes the optimizer starting positions.
+
+This is undesirable for a bounds-convergence experiment because two things
+would change simultaneously.
+
+For bounds-convergence studies, use absolute `piEN_grid_values` and
+`piEE_grid_values`.
+
+
+### Bounds-convergence validation
+
+Before adopting a production domain, compare increasingly broad
+truth-independent bounds while keeping fixed:
+
+- simulated data;
+- noise realization;
+- optimizer;
+- optimizer tolerances;
+- physical initial guesses;
+- H1 parallax multistarts;
+- bounded flux profiling.
+
+Only the fitting bounds should change.
+
+For example, compare
+
+    delta_chi2_H0 =
+        chi2_H0_moderate - chi2_H0_stress
+
+and
+
+    delta_chi2_H1 =
+        chi2_H1_moderate - chi2_H1_stress
+
+A production domain is considered sufficiently broad when enlarging it further
+does not materially change the relevant minima and the winning solutions are
+not artificially pinned to a boundary.
+
+Bounds-validation configurations are stored under
+
+    configs/validation/bounds_convergence/
+
+<!-- END FIT_CONFIG_REFERENCE -->
+

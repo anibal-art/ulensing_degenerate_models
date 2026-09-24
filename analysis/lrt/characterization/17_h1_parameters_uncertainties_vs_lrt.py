@@ -42,6 +42,26 @@ import numpy as np
 import pandas as pd
 import matplotlib.pyplot as plt
 
+import sys as _paper_sys
+from pathlib import Path as _PaperPath
+
+_PAPER_LRT_DIR = next(
+    parent
+    for parent in _PaperPath(__file__).resolve().parents
+    if parent.name == "lrt"
+)
+_paper_sys.path.insert(
+    0,
+    str(_PAPER_LRT_DIR / "plotting"),
+)
+from paper_style import (
+    apply_paper_style,
+    label_panels,
+    save_pdf_companion,
+)
+
+apply_paper_style()
+
 
 # ============================================================
 # Paths
@@ -616,7 +636,7 @@ def main():
     fig, axes = plt.subplots(
         2,
         4,
-        figsize=(14.0, 7.2),
+        figsize=(7.2, 5.0),
         sharex=True,
     )
 
@@ -856,21 +876,15 @@ def main():
             r"$\Delta\chi^2_{\rm LRT}$"
         )
 
-    fig.suptitle(
-        (
-            "H1 fitted parameters and formal uncertainties "
-            "across the LRT population"
-        ),
-        y=1.01,
-    )
 
-    fig.tight_layout()
 
+    label_panels(axes)
     fig.savefig(
         FIGURE,
-        dpi=220,
+        dpi=300,
         bbox_inches="tight",
     )
+    save_pdf_companion(fig, FIGURE)
 
     # ========================================================
     # Region-level summary
@@ -984,3 +998,5 @@ def main():
 
 if __name__ == "__main__":
     main()
+
+
