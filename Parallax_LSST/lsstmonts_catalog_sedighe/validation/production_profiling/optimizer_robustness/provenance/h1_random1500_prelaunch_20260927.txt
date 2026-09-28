@@ -1,0 +1,15 @@
+DATE
+2026-09-27T17:32:30-03:00
+
+HEAD
+1feaf19a6eebf53c1d1ec81b788fd4461ee7378b
+
+STATUS
+ M validation/production_profiling/stage_h1_controlled4.py
+?? validation/production_profiling/optimizer_robustness/
+
+SHA256
+20f9896a3e55ed2623b0c50008ead1add688afa9d096fd6fa5122788ce05c0e0  validation/production_profiling/stage_h1_controlled4.py
+2043b030a5205ce1884981f8674cb9d6bc5d269892235cb6f340595b9f894243  validation/production_profiling/optimizer_robustness/run_h1_robustness_worker.py
+f113a37c432d6cd7c8406cf2b547372e615392ad3f2f931bb3af3b32f7ca0e5b  validation/production_profiling/optimizer_robustness/h1_random1500_manifest.csv
+5db5712c1051a7b991bad613f8ae8e92386f7c7c49dd745183c29dbec4ad8a41  validation/production_profiling/optimizer_robustness/build_h1_random1500_manifest.py
