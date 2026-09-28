@@ -1,0 +1,60 @@
+{
+  "n_excluded": 324,
+  "sources": [
+    {
+      "file": "validation/bounds_audit/data/refit_manifest.csv",
+      "id_column": "catalog_row",
+      "n_unique": 34
+    },
+    {
+      "file": "validation/bounds_convergence/data/extreme100_refit_manifest.csv",
+      "id_column": "catalog_row",
+      "n_unique": 100
+    },
+    {
+      "file": "validation/bounds_convergence/data/extreme100_selection.csv",
+      "id_column": "catalog_row",
+      "n_unique": 100
+    },
+    {
+      "file": "validation/bounds_convergence/data/gate2_h0_anchor_manifest_extreme100.csv",
+      "id_column": "catalog_row",
+      "n_unique": 100
+    },
+    {
+      "file": "validation/bounds_convergence/data/extreme100_h0_crossseeds.csv",
+      "id_column": "catalog_row",
+      "n_unique": 26
+    },
+    {
+      "file": "validation/bounds_convergence/data/extreme100_h0_crossseeds_after_closure.csv",
+      "id_column": "catalog_row",
+      "n_unique": 5
+    },
+    {
+      "file": "validation/production_profiling/results/profiling_sample_frozen_100.csv",
+      "id_column": "catalog_row",
+      "n_unique": 25
+    },
+    {
+      "file": "validation/production_profiling/results/h0_generated_sample_frozen.csv",
+      "id_column": "catalog_row",
+      "n_unique": 5
+    },
+    {
+      "file": "validation/production_profiling/results/h0_calibration_sample_frozen.csv",
+      "id_column": "catalog_row",
+      "n_unique": 60
+    },
+    {
+      "file": "validation/production_profiling/results/h1_basin_validation_sample_frozen.csv",
+      "id_column": "catalog_row",
+      "n_unique": 100
+    },
+    {
+      "file": "validation/production_profiling/results/reference_pass_manifest_9events.csv",
+      "id_column": "catalog_row",
+      "n_unique": 9
+    }
+  ]
+}

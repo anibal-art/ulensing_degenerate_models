@@ -29,11 +29,39 @@ args = ap.parse_args()
 
 os.environ["HIDDEN_PARALLAX_TRF_COORDS"] = "physical"
 os.environ["HIDDEN_PARALLAX_T0_MARGIN_FACTOR"] = "0"
-sys.argv = ["run_bounds_audit_refit_core.py", "--catalog-row", "71181",
-            "--bounds-profile", "production_candidate", "--fit-scope", "h1", "--dry-run"]
+os.environ["HIDDEN_PARALLAX_TRF_X_SCALE"] = "jac"
+
+sys.argv = [
+    "run_bounds_audit_refit_core.py",
+    "--catalog-row",
+    "71181",
+    "--manifest",
+    os.path.join(
+        BA,
+        "data",
+        "refit_manifest.csv",
+    ),
+    "--bounds-profile",
+    "production_candidate",
+    "--fit-scope",
+    "h1",
+    "--dry-run",
+]
 
 import numpy as np  # noqa: E402
 import run_bounds_audit_refit_core as core  # noqa: E402
+
+if core.OPTIMIZER_OPTIONS.get("x_scale") != "jac":
+    raise RuntimeError(
+        "Unexpected effective optimizer x_scale: "
+        f"{core.OPTIMIZER_OPTIONS.get('x_scale')!r}"
+    )
+
+print(
+    "[optimizer_config] effective x_scale=",
+    core.OPTIMIZER_OPTIONS.get("x_scale"),
+    flush=True,
+)
 from load_new_event import load_new_case  # noqa: E402
 
 assert core.BOUNDS_PROFILE == "production_candidate"
