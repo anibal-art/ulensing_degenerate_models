@@ -1,11 +1,8 @@
 {
   "paths": {
-    "microlensing_root": "${MICROLENSING_ROOT}",
     "roman_rubin_dir": "${ROMAN_RUBIN_DIR}",
-    "roman_ephemerides": "${ROMAN_RUBIN_DIR}/ephemerides/Roman_positions.npy",
     "ulensing_degenerate_models_root": "${ULENSING_DEGENERATE_MODELS_ROOT}",
     "parallax_lsst_root": "${ULENSING_DEGENERATE_MODELS_ROOT}/Parallax_LSST",
-    "runner_path": "${PARALLAX_LSST_BASE}/lsstmonts_catalog_sedighe/run_lsstmonts_catalog_hidden_parallax.py",
     "output_root": "${OUTPUT_ROOT}"
   },
   "path_storage": "${OUTPUT_ROOT}/runs",

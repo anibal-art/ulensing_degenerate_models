@@ -87,10 +87,11 @@ args = parse_args()
 HERE = Path(__file__).resolve().parent
 PROJECT_DIR = HERE.parent
 
+# Frozen exclusion lists of the H0 calibration sample (moved from
+# validation/production_profiling when validation/ went to legacy/).
 PP = (
     PROJECT_DIR
-    / "validation"
-    / "production_profiling"
+    / "production"
 )
 
 BA = (
@@ -105,19 +106,15 @@ BC = (
     / "bounds_convergence"
 )
 
+# roman_rubin main port: lrt_engine + roman_rubin on sys.path.
 sys.path.insert(
     0,
-    str(PP),
+    os.environ["ROMAN_RUBIN_DIR"],
 )
 
 sys.path.insert(
     0,
-    str(BA),
-)
-
-sys.path.insert(
-    0,
-    str(BC),
+    str(PROJECT_DIR / "lrt_engine"),
 )
 
 
@@ -139,7 +136,7 @@ if not CONFIG_PATH.is_file():
     )
 
 os.environ[
-    "LRT_MATERIALIZE_CONFIG"
+    "LRT_CONFIG"
 ] = str(CONFIG_PATH)
 
 os.environ[
@@ -159,34 +156,10 @@ os.environ[
 # Import existing scientific implementation
 # ============================================================
 
-from standalone_materialize import materialize_event  # noqa: E402
+from materialize import materialize_event  # noqa: E402
 
-
-_original_argv = list(
-    sys.argv
-)
-
-sys.argv = [
-    "run_bounds_audit_refit_core.py",
-    "--catalog-row",
-    "71181",
-    "--manifest",
-    str(
-        BA
-        / "data"
-        / "refit_manifest.csv"
-    ),
-    "--bounds-profile",
-    "production_candidate",
-    "--fit-scope",
-    "h0",
-    "--dry-run",
-]
-
-import run_bounds_audit_refit_core as core  # noqa: E402
+import fit_core as core  # noqa: E402
 import fit_lc  # noqa: E402
-
-sys.argv = _original_argv
 
 from load_new_event import load_new_case  # noqa: E402
 from lrt_fit_policy import (  # noqa: E402
@@ -226,7 +199,7 @@ def build_candidate_order(seed):
     h1_sample = set(
         pd.read_csv(
             PP
-            / "results"
+            / "data"
             / "profiling_sample_frozen_100.csv"
         )["catalog_row"]
         .astype(int)
@@ -236,7 +209,7 @@ def build_candidate_order(seed):
     h0_smoke = set(
         pd.read_csv(
             PP
-            / "results"
+            / "data"
             / "h0_generated_sample_frozen.csv"
         )["catalog_row"]
         .astype(int)

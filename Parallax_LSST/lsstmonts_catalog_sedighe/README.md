@@ -1,3 +1,39 @@
+# Hidden-parallax LRT pipeline on roman_rubin main
+
+The production pipeline (`production/run_lrt_two_fit_chunk.py` for H1,
+`production/run_h0_calibration_chunk.py` for the H0 calibration) runs on
+roman_rubin `main` with the options added in branch
+`port-degenerate-models`: `fit_coordinates="log_te_rho"` (pyLIMA
+fancy_parameters), `flux_method="bounded_profile"`, `sim_event(noise_seed=...)`
+and per-event `active_bands`. No runtime patches of roman_rubin or pyLIMA
+are installed.
+
+`lrt_engine/` holds the project-specific code:
+
+- `sedighe_catalog.py`: Sedighe LSSTMONTS row -> prepared row (xi -> piEN/piEE,
+  t0 from the first visible MAF timestamp, visible bands from DetectionFlag).
+- `detectability.py`: pre-fit Asimov detectability gate.
+- `materialize.py`: prepared row -> materialized roman_rubin row
+  (fsource/ftotal/blend_ratio for the visible bands, tE from the catalogue)
+  -> `sim_event` -> `Event_<row>.h5`.
+- `fit_core.py`, `lrt_fit_policy.py`, `run_one_fit_full.py`, ...: the frozen
+  two-fit LRT policy on `fit_lc.fit_rubin_roman`.
+
+`sedighe_catalog.py`, `detectability.py` and parts of `fit_core.py` were moved
+verbatim from the historical code with `tools/extract_module.py`.
+
+Validation of the port (commit deeeaae + roman_rubin 9653d94 as reference):
+identical prepared rows and event selection, identical light-curve times and
+truth parameters (tE: catalogue value instead of the ulens_params
+reconstruction, |dtE/tE| <= 1e-4), statistically equivalent photometric
+noise, and bit-identical H0/H1 fits on the reference light curves.
+
+The historical runner, standalone materializer, bounds-audit core and all of
+`validation/` are in `legacy/` (not maintained; kept for provenance).
+
+Environment: `ROMAN_RUBIN_DIR`, `ULENSING_DEGENERATE_MODELS_ROOT`,
+`PARALLAX_LSST_BASE`, `RUBIN_SIM_DATA_DIR`, `OUTPUT_ROOT`.
+
 # LSSTMONTS runner: assume catalog alpha is xi
 
 This version makes the provisional assumption explicit:

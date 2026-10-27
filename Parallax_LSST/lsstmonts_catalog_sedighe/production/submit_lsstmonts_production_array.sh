@@ -26,7 +26,7 @@ MICROLENSING_ROOT="${MICROLENSING_ROOT:-/home/anibalvarela/microlensing}"
 
 ULENSING_DEGENERATE_MODELS_ROOT="${ULENSING_DEGENERATE_MODELS_ROOT:-/export/storage3/rubin/microlensing/romanrubin/ulensing_degenerate_models}"
 PARALLAX_LSST_BASE="${PARALLAX_LSST_BASE:-${ULENSING_DEGENERATE_MODELS_ROOT}/Parallax_LSST}"
-ROMAN_RUBIN_DIR="${ROMAN_RUBIN_DIR:-${MICROLENSING_ROOT}/simulation_Rubin/roman_rubin}"
+ROMAN_RUBIN_DIR="${ROMAN_RUBIN_DIR:?set ROMAN_RUBIN_DIR to the roman_rubin checkout (main + port-degenerate-models)}"
 RUBIN_SIM_DATA_DIR="${RUBIN_SIM_DATA_DIR:-/share/storage3/rubin/microlensing/romanrubin/rubin_sim_data}"
 
 # Full LSSTMONTS catalog has 966000 rows.

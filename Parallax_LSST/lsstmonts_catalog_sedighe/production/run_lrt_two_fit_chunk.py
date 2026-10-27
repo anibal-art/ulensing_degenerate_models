@@ -184,17 +184,19 @@ out_dir.mkdir(
 
 
 # ============================================================
-# NEW BLOCK: make project validation modules importable
+# roman_rubin main port: lrt_engine + roman_rubin on sys.path
 # ============================================================
+
+ENGINE_DIR = PROJECT_DIR / "lrt_engine"
 
 sys.path.insert(
     0,
-    str(PROFILING_DIR),
+    os.environ["ROMAN_RUBIN_DIR"],
 )
 
 sys.path.insert(
     0,
-    str(BOUNDS_AUDIT_DIR),
+    str(ENGINE_DIR),
 )
 
 
@@ -202,16 +204,15 @@ sys.path.insert(
 # NEW BLOCK: simulation/materialization bootstrap
 # ============================================================
 #
-# standalone_materialize chooses its driver configuration when the
-# module is imported. Therefore this environment variable MUST be set
-# before importing it.
+# lrt_engine reads the production config when it is imported.
+# Therefore this environment variable MUST be set before importing it.
 # ============================================================
 
 os.environ[
-    "LRT_MATERIALIZE_CONFIG"
+    "LRT_CONFIG"
 ] = str(config_path)
 
-from standalone_materialize import (  # noqa: E402
+from materialize import (  # noqa: E402
     materialize_event,
     preload_catalog_window,
 )
@@ -239,42 +240,10 @@ os.environ[
 ] = "0"
 
 
-if not CORE_MANIFEST_PATH.is_file():
-    raise FileNotFoundError(
-        "Bounds-audit bootstrap manifest not found: "
-        f"{CORE_MANIFEST_PATH}"
-    )
+# Fitting configuration (bounds profile, optimizer options) for the
+# roman_rubin main fits; replaces the bounds-audit core bootstrap.
+import fit_core as core  # noqa: E402
 
-
-# run_bounds_audit_refit_core parses its CLI at import time.
-#
-# Use the same harmless dry-run bootstrap row already exercised by
-# run_lrt_policy_batch.py. The actual production event is supplied
-# later through load_new_case(); no fit is executed by this import.
-original_argv = list(
-    sys.argv
-)
-
-sys.argv = [
-    "run_bounds_audit_refit_core.py",
-    "--catalog-row",
-    "71181",
-    "--manifest",
-    str(CORE_MANIFEST_PATH),
-    "--bounds-profile",
-    "production_candidate",
-    "--fit-scope",
-    "h0",
-    "--dry-run",
-]
-
-try:
-    import run_bounds_audit_refit_core as core  # noqa: E402
-finally:
-    sys.argv = original_argv
-
-
-# The core itself imports the canonical Roman/Rubin fit_lc module.
 import fit_lc  # noqa: E402
 
 from load_new_event import load_new_case  # noqa: E402
